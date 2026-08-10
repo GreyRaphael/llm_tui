@@ -30,9 +30,10 @@
 - **📋 一键剪贴板导出**:
   - `Ctrl+Y`: 一键复制原始 Request JSON Payload 到系统剪贴板。
   - `Ctrl+U`: 一键复制格式化后的 Response JSON 到系统剪贴板。
-- **🛠️ 进阶 SSE 流式响应与字符编码支持**:
-  - 自动识别 GBK / GB2312 编码响应并解码为标准 UTF-8。
-  - 自动解析并组装嵌入的 SSE (`text/event-stream`) 流式数据块，重构为完整 JSON 响应。
+- **⚡ 实时 SSE 流式传输与思考过程 (Reasoning Process) 可视化**:
+  - 原生支持基于 HTTP SSE (`text/event-stream`) 的打字机式实时流式渲染。
+  - 自动提取并独立展示 DeepSeek-R1、QwQ、Claude 3.7 等推理/思考模型的 **💭 思考过程 (Thinking Process)** 与 **💬 响应内容 (Response Content)**。
+  - 自动识别 GBK / GB2312 字符编码并无缝转换为 UTF-8，流传输结束后自动重构完整 JSON 以供 `Ctrl+U` 剪贴板复制。
 
 ---
 

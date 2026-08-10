@@ -38,3 +38,17 @@ type ModelsResponse struct {
 		ID string `json:"id"`
 	} `json:"data"`
 }
+
+// StreamChunkMsg represents a real-time SSE stream delta sent to the TUI update loop
+type StreamChunkMsg struct {
+	ContentDelta     string        `json:"content_delta,omitempty"`
+	ReasoningDelta   string        `json:"reasoning_delta,omitempty"`
+	StatusCode       int           `json:"status_code,omitempty"`
+	Latency          time.Duration `json:"latency,omitempty"`
+	PromptTokens     int           `json:"prompt_tokens,omitempty"`
+	CompletionTokens int           `json:"completion_tokens,omitempty"`
+	TotalTokens      int           `json:"total_tokens,omitempty"`
+	Err              error         `json:"error,omitempty"`
+	Done             bool          `json:"done"`
+}
+

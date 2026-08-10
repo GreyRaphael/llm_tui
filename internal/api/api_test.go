@@ -192,3 +192,69 @@ func TestProbeProviderAndExecute(t *testing.T) {
 		t.Errorf("expected response text in formatted body: %s", testRes.FormattedBody)
 	}
 }
+
+func TestExecuteStreamRequest(t *testing.T) {
+	sseData := `data: {"id":"chat-1","object":"chat.completion.chunk","created":1700000000,"model":"deepseek-reasoner","choices":[{"index":0,"delta":{"reasoning_content":"Let me think step by step... "},"finish_reason":null}]}
+data: {"id":"chat-1","object":"chat.completion.chunk","created":1700000000,"model":"deepseek-reasoner","choices":[{"index":0,"delta":{"reasoning_content":"Done thinking."},"finish_reason":null}]}
+data: {"id":"chat-1","object":"chat.completion.chunk","created":1700000000,"model":"deepseek-reasoner","choices":[{"index":0,"delta":{"content":"The answer is "},"finish_reason":null}]}
+data: {"id":"chat-1","object":"chat.completion.chunk","created":1700000000,"model":"deepseek-reasoner","choices":[{"index":0,"delta":{"content":"42."},"finish_reason":null}]}
+data: {"id":"chat-1","object":"chat.completion.chunk","created":1700000000,"model":"deepseek-reasoner","choices":[],"usage":{"prompt_tokens":12,"completion_tokens":45,"total_tokens":57}}
+data: [DONE]`
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(sseData))
+	}))
+	defer server.Close()
+
+	ch := make(chan StreamChunkMsg, 50)
+	go ExecuteStreamRequest(server.URL, "sk-test", APITypeOpenAIChat, `{"model":"deepseek-reasoner","stream":true}`, ch)
+
+	var fullContent strings.Builder
+	var fullReasoning strings.Builder
+	var finalStatusCode int
+	var finalPromptTokens, finalCompletionTokens, finalTotalTokens int
+	var isDone bool
+
+	for msg := range ch {
+		if msg.StatusCode != 0 {
+			finalStatusCode = msg.StatusCode
+		}
+		if msg.ContentDelta != "" {
+			fullContent.WriteString(msg.ContentDelta)
+		}
+		if msg.ReasoningDelta != "" {
+			fullReasoning.WriteString(msg.ReasoningDelta)
+		}
+		if msg.PromptTokens > 0 {
+			finalPromptTokens = msg.PromptTokens
+		}
+		if msg.CompletionTokens > 0 {
+			finalCompletionTokens = msg.CompletionTokens
+		}
+		if msg.TotalTokens > 0 {
+			finalTotalTokens = msg.TotalTokens
+		}
+		if msg.Done {
+			isDone = true
+		}
+	}
+
+	if finalStatusCode != http.StatusOK {
+		t.Errorf("expected HTTP 200, got %d", finalStatusCode)
+	}
+	if !isDone {
+		t.Errorf("expected stream to mark Done: true")
+	}
+	if fullReasoning.String() != "Let me think step by step... Done thinking." {
+		t.Errorf("unexpected reasoning content: %q", fullReasoning.String())
+	}
+	if fullContent.String() != "The answer is 42." {
+		t.Errorf("unexpected answer content: %q", fullContent.String())
+	}
+	if finalPromptTokens != 12 || finalCompletionTokens != 45 || finalTotalTokens != 57 {
+		t.Errorf("unexpected token usage stats: P=%d, C=%d, T=%d", finalPromptTokens, finalCompletionTokens, finalTotalTokens)
+	}
+}
+

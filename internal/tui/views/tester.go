@@ -1,8 +1,10 @@
 package views
 
 import (
+	"encoding/json"
 	"fmt"
 	"strings"
+	"time"
 
 	"llm_tui/internal/api"
 	"llm_tui/internal/db"
@@ -24,21 +26,31 @@ const (
 )
 
 type TesterModel struct {
-	DB               *db.DB
-	Record           db.ProviderRecord
-	ReasoningEffort  string
-	Textarea         textarea.Model
-	Viewport         viewport.Model
-	Spinner          spinner.Model
-	ActivePane       ActivePane
-	IsExecuting      bool
-	SelectingModel   bool
-	DiscoveredModels []string
-	ModelIndex       int
-	LastResult       *api.TestResult
-	CopyStatusMsg    string
-	Width            int
-	Height           int
+	DB                     *db.DB
+	Record                 db.ProviderRecord
+	ReasoningEffort        string
+	Textarea               textarea.Model
+	Viewport               viewport.Model
+	Spinner                spinner.Model
+	ActivePane             ActivePane
+	IsExecuting            bool
+	IsStreamMode           bool
+	SelectingModel         bool
+	DiscoveredModels       []string
+	ModelIndex             int
+	LastResult             *api.TestResult
+	CopyStatusMsg          string
+	Width                  int
+	Height                 int
+	StreamChan             chan api.StreamChunkMsg
+	ReasoningText          string
+	ContentText            string
+	StreamStatusCode       int
+	StreamLatency          time.Duration
+	StreamPromptTokens     int
+	StreamCompletionTokens int
+	StreamTotalTokens      int
+	StreamError            string
 }
 
 type executeFinishedMsg struct {
@@ -131,6 +143,114 @@ func (m TesterModel) Update(msg tea.Msg) (TesterModel, tea.Cmd, string) {
 		m.Viewport.GotoTop()
 		m.CopyStatusMsg = ""
 		return m, nil, ""
+
+	case api.StreamChunkMsg:
+		if msg.StatusCode != 0 {
+			m.StreamStatusCode = msg.StatusCode
+		}
+		if msg.Latency != 0 {
+			m.StreamLatency = msg.Latency
+		}
+		if msg.PromptTokens > 0 {
+			m.StreamPromptTokens = msg.PromptTokens
+		}
+		if msg.CompletionTokens > 0 {
+			m.StreamCompletionTokens = msg.CompletionTokens
+		}
+		if msg.TotalTokens > 0 {
+			m.StreamTotalTokens = msg.TotalTokens
+		}
+		if msg.Err != nil {
+			m.StreamError = msg.Err.Error()
+		}
+
+		if msg.ReasoningDelta != "" {
+			m.ReasoningText += msg.ReasoningDelta
+		}
+		if msg.ContentDelta != "" {
+			m.ContentText += msg.ContentDelta
+		}
+
+		reasoningText := m.ReasoningText
+		contentText := m.ContentText
+
+		var formattedContent string
+		if reasoningText != "" {
+			var rBuilder strings.Builder
+			rBuilder.WriteString(styles.BadgeAccentStyle.Render("💭 Thinking Process") + "\n")
+			rBuilder.WriteString(styles.HelpStyle.Render("-------------------") + "\n")
+			rBuilder.WriteString(reasoningText + "\n\n")
+			rBuilder.WriteString(styles.BadgeSuccessStyle.Render("💬 Response Content") + "\n")
+			rBuilder.WriteString(styles.HelpStyle.Render("-------------------") + "\n")
+			rBuilder.WriteString(contentText)
+			formattedContent = rBuilder.String()
+		} else if contentText != "" {
+			if json.Valid([]byte(contentText)) {
+				formattedContent = api.FormatJSON(contentText)
+			} else {
+				formattedContent = contentText
+			}
+		} else if m.StreamError != "" {
+			formattedContent = styles.ErrorStyle.Render("Error: " + m.StreamError)
+		}
+
+		m.Viewport.SetContent(formattedContent)
+		if m.IsExecuting {
+			m.Viewport.GotoBottom()
+		}
+
+		if msg.Done {
+			m.IsExecuting = false
+			m.StreamChan = nil
+
+			var assembledJSON string
+			if reasoningText != "" || contentText != "" {
+				assembledMap := map[string]interface{}{
+					"model": m.Record.Model,
+					"choices": []map[string]interface{}{
+						{
+							"index": 0,
+							"message": map[string]interface{}{
+								"role":              "assistant",
+								"content":           contentText,
+								"reasoning_content": reasoningText,
+							},
+							"finish_reason": "stop",
+						},
+					},
+					"usage": map[string]int{
+						"prompt_tokens":     m.StreamPromptTokens,
+						"completion_tokens": m.StreamCompletionTokens,
+						"total_tokens":      m.StreamTotalTokens,
+					},
+				}
+				buf, err := json.Marshal(assembledMap)
+				if err == nil {
+					assembledJSON = string(buf)
+				} else {
+					assembledJSON = contentText
+				}
+			} else if m.StreamError != "" {
+				assembledJSON = fmt.Sprintf(`{"error": %q}`, m.StreamError)
+			}
+
+			m.LastResult = &api.TestResult{
+				StatusCode:       m.StreamStatusCode,
+				Latency:          m.StreamLatency,
+				PromptTokens:     m.StreamPromptTokens,
+				CompletionTokens: m.StreamCompletionTokens,
+				TotalTokens:      m.StreamTotalTokens,
+				RawBody:          assembledJSON,
+				FormattedBody:    api.FormatJSON(assembledJSON),
+				Error:            m.StreamError,
+			}
+			m.CopyStatusMsg = ""
+
+			m.Viewport.SetContent(formattedContent)
+			return m, nil, ""
+		}
+
+		return m, waitForStreamChunkCmd(m.StreamChan), ""
 
 	case tea.KeyMsg:
 		if m.SelectingModel {
@@ -227,11 +347,42 @@ func (m TesterModel) Update(msg tea.Msg) (TesterModel, tea.Cmd, string) {
 		case "ctrl+s", "ctrl+r":
 			m.IsExecuting = true
 			m.CopyStatusMsg = ""
+			m.ReasoningText = ""
+			m.ContentText = ""
+			m.StreamStatusCode = 0
+			m.StreamLatency = 0
+			m.StreamPromptTokens = 0
+			m.StreamCompletionTokens = 0
+			m.StreamTotalTokens = 0
+			m.StreamError = ""
+			m.LastResult = nil
+			m.Viewport.SetContent("")
+
 			m.Record.CustomPayload = m.Textarea.Value()
 			m.Record.ReasoningEffort = m.ReasoningEffort
 			_ = m.DB.UpdateRecord(&m.Record)
 
-			return m, tea.Batch(m.Spinner.Tick, m.runExecuteCmd()), ""
+			// Parse stream property from request payload
+			var payloadMap map[string]interface{}
+			isStream := false
+			if err := json.Unmarshal([]byte(m.Textarea.Value()), &payloadMap); err == nil {
+				if s, ok := payloadMap["stream"].(bool); ok {
+					isStream = s
+				}
+			} else {
+				if strings.Contains(m.Textarea.Value(), `"stream": true`) || strings.Contains(m.Textarea.Value(), `"stream":true`) {
+					isStream = true
+				}
+			}
+			m.IsStreamMode = isStream
+
+			if isStream {
+				execCmd, ch := m.runExecuteStreamCmd()
+				m.StreamChan = ch
+				return m, tea.Batch(m.Spinner.Tick, execCmd), ""
+			} else {
+				return m, tea.Batch(m.Spinner.Tick, m.runExecuteNonStreamCmd()), ""
+			}
 
 		case "alt+1", "alt+2", "alt+3", "alt+4":
 			switch msg.String() {
@@ -269,7 +420,7 @@ func (m TesterModel) runFetchModelsCmd() tea.Cmd {
 	}
 }
 
-func (m TesterModel) runExecuteCmd() tea.Cmd {
+func (m TesterModel) runExecuteNonStreamCmd() tea.Cmd {
 	baseURL := m.Record.BaseURL
 	apiKey := m.Record.APIKey
 	apiType := m.Record.APIType
@@ -278,6 +429,30 @@ func (m TesterModel) runExecuteCmd() tea.Cmd {
 	return func() tea.Msg {
 		res := api.ExecuteTestRequest(baseURL, apiKey, apiType, payload)
 		return executeFinishedMsg{result: res}
+	}
+}
+
+func (m *TesterModel) runExecuteStreamCmd() (tea.Cmd, chan api.StreamChunkMsg) {
+	baseURL := m.Record.BaseURL
+	apiKey := m.Record.APIKey
+	apiType := m.Record.APIType
+	payload := m.Textarea.Value()
+
+	ch := make(chan api.StreamChunkMsg, 100)
+	go api.ExecuteStreamRequest(baseURL, apiKey, apiType, payload, ch)
+	return waitForStreamChunkCmd(ch), ch
+}
+
+func waitForStreamChunkCmd(ch chan api.StreamChunkMsg) tea.Cmd {
+	return func() tea.Msg {
+		if ch == nil {
+			return api.StreamChunkMsg{Done: true}
+		}
+		msg, ok := <-ch
+		if !ok {
+			return api.StreamChunkMsg{Done: true}
+		}
+		return msg
 	}
 }
 
@@ -393,12 +568,22 @@ func (m TesterModel) View() string {
 	// 2. Render Right Pane (Response Panel)
 	var rightBorderColor lipgloss.Color
 	var rightTitle string
-	if m.ActivePane == PaneResponse {
-		rightBorderColor = styles.ColorSecondary
-		rightTitle = "📊 Response JSON (Active Scroll)"
+	if m.IsStreamMode {
+		if m.ActivePane == PaneResponse {
+			rightBorderColor = styles.ColorSecondary
+			rightTitle = "📊 Response Stream (Active Scroll)"
+		} else {
+			rightBorderColor = styles.ColorMuted
+			rightTitle = "📊 Response Stream"
+		}
 	} else {
-		rightBorderColor = styles.ColorMuted
-		rightTitle = "📊 Response JSON"
+		if m.ActivePane == PaneResponse {
+			rightBorderColor = styles.ColorSecondary
+			rightTitle = "📊 Response JSON (Active Scroll)"
+		} else {
+			rightBorderColor = styles.ColorMuted
+			rightTitle = "📊 Response JSON"
+		}
 	}
 
 	rightBoxStyle := lipgloss.NewStyle().
@@ -416,7 +601,28 @@ func (m TesterModel) View() string {
 	}
 
 	if m.IsExecuting {
-		rightContentBuilder.WriteString("\n" + m.Spinner.View() + " Sending request payload...\n")
+		if m.IsStreamMode {
+			statusText := "HTTP ..."
+			if m.StreamStatusCode > 0 {
+				statusText = fmt.Sprintf("HTTP %d", m.StreamStatusCode)
+			}
+			metrics := fmt.Sprintf(
+				"%s %s | Latency: %s\nTokens: P=%d, C=%d, T=%d",
+				m.Spinner.View(),
+				styles.BadgeSuccessStyle.Render(statusText),
+				styles.MetricValueStyle.Render(fmt.Sprintf("%v", m.StreamLatency)),
+				m.StreamPromptTokens,
+				m.StreamCompletionTokens,
+				m.StreamTotalTokens,
+			)
+			rightContentBuilder.WriteString(metrics + "\n\n")
+			if m.StreamError != "" {
+				rightContentBuilder.WriteString(styles.ErrorStyle.Render("Error: "+m.StreamError) + "\n")
+			}
+			rightContentBuilder.WriteString(m.Viewport.View())
+		} else {
+			rightContentBuilder.WriteString("\n" + m.Spinner.View() + " Sending request payload...\n")
+		}
 	} else if m.LastResult != nil {
 		var statusStyle lipgloss.Style
 		statusText := fmt.Sprintf("HTTP %d", m.LastResult.StatusCode)
@@ -460,3 +666,4 @@ func (m TesterModel) View() string {
 
 	return sb.String()
 }
+

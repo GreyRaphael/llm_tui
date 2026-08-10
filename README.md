@@ -30,9 +30,10 @@ Built using the **Charm.sh** ecosystem (`bubbletea`, `lipgloss`, `viewport`, `te
 - **📋 One-Click Clipboard Export**:
   - `Ctrl+Y`: Copy raw Request JSON payload to system clipboard.
   - `Ctrl+U`: Copy formatted Response JSON payload to system clipboard.
-- **🛠️ Advanced Stream & Encoding Support**:
-  - Automatically decodes GBK / GB2312 responses to UTF-8.
-  - Assembles embedded SSE (`text/event-stream`) stream chunks into consolidated JSON completions.
+- **⚡ Real-Time SSE Streaming & Reasoning Process Visualization**:
+  - Native support for typewriter-style real-time streaming via HTTP SSE (`text/event-stream`).
+  - Automatically extracts and renders **💭 Thinking Process** and **💬 Response Content** into dedicated TUI sections for reasoning models (DeepSeek-R1, QwQ, Claude 3.7 Thinking, etc.).
+  - Auto-detects GBK / GB2312 encodings to UTF-8 and re-assembles full JSON for instant `Ctrl+U` clipboard export upon completion.
 
 ---
 

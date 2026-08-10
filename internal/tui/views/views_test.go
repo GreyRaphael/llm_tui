@@ -254,3 +254,91 @@ func TestProbeModel_Resize(t *testing.T) {
 		t.Errorf("expected input width clamped to 50, got %d", m.BaseURLInput.Width)
 	}
 }
+
+func TestTesterModel_StreamMsgUpdate(t *testing.T) {
+	database, err := db.InitDB(":memory:")
+	if err != nil {
+		t.Fatalf("failed to init memory db: %v", err)
+	}
+	defer database.Close()
+
+	rec := db.ProviderRecord{
+		Name:    "Test DeepSeek",
+		BaseURL: "https://api.deepseek.com",
+		APIKey:  "sk-test-key",
+		APIType: api.APITypeOpenAIChat,
+		Model:   "deepseek-reasoner",
+	}
+	m := NewTesterModel(database, rec)
+	m.Resize(100, 30)
+
+	// Send reasoning chunk msg
+	m, _, _ = m.Update(api.StreamChunkMsg{
+		StatusCode:     200,
+		ReasoningDelta: "Analyzing request... ",
+	})
+
+	// Send content chunk msg
+	m, _, _ = m.Update(api.StreamChunkMsg{
+		ContentDelta: "Hello World!",
+		PromptTokens: 10,
+		CompletionTokens: 20,
+		TotalTokens: 30,
+	})
+
+	if m.ReasoningText != "Analyzing request... " {
+		t.Errorf("unexpected reasoning content: %q", m.ReasoningText)
+	}
+	if m.ContentText != "Hello World!" {
+		t.Errorf("unexpected content content: %q", m.ContentText)
+	}
+
+	// Send stream finish msg
+	m, _, _ = m.Update(api.StreamChunkMsg{
+		Done: true,
+	})
+
+	if m.IsExecuting {
+		t.Errorf("expected IsExecuting to be false after stream done")
+	}
+	if m.LastResult == nil {
+		t.Fatalf("expected non-nil LastResult after stream done")
+	}
+	if m.LastResult.PromptTokens != 10 || m.LastResult.CompletionTokens != 20 || m.LastResult.TotalTokens != 30 {
+		t.Errorf("unexpected token usage in LastResult: %+v", m.LastResult)
+	}
+}
+
+func TestTesterModel_StreamModeDetection(t *testing.T) {
+	database, err := db.InitDB(":memory:")
+	if err != nil {
+		t.Fatalf("failed to init memory db: %v", err)
+	}
+	defer database.Close()
+
+	rec := db.ProviderRecord{
+		Name:    "Test Provider",
+		BaseURL: "https://api.openai.com",
+		APIKey:  "sk-test",
+		APIType: api.APITypeOpenAIChat,
+		Model:   "gpt-4o",
+	}
+
+	m := NewTesterModel(database, rec)
+
+	// Test payload with stream: false
+	m.Textarea.SetValue(`{"model":"gpt-4o","stream":false,"messages":[{"role":"user","content":"hi"}]}`)
+	m, _, _ = m.Update(tea.KeyMsg{Type: tea.KeyCtrlS})
+	if m.IsStreamMode {
+		t.Errorf("expected IsStreamMode to be false for stream: false payload")
+	}
+
+	// Test payload with stream: true
+	m.Textarea.SetValue(`{"model":"gpt-4o","stream":true,"messages":[{"role":"user","content":"hi"}]}`)
+	m, _, _ = m.Update(tea.KeyMsg{Type: tea.KeyCtrlS})
+	if !m.IsStreamMode {
+		t.Errorf("expected IsStreamMode to be true for stream: true payload")
+	}
+}
+
+

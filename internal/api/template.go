@@ -31,6 +31,7 @@ func GeneratePayloadTemplate(apiType, model, reasoningEffort string) string {
 				},
 			},
 			"max_tokens": 1024,
+			"stream":     true,
 		}
 		if reasoningEffort != "" && reasoningEffort != "none" {
 			rawMap["output_config"] = map[string]interface{}{
@@ -40,8 +41,9 @@ func GeneratePayloadTemplate(apiType, model, reasoningEffort string) string {
 
 	case APITypeOpenAIResponses:
 		rawMap = map[string]interface{}{
-			"model": model,
-			"input": "hello, introduce yourself",
+			"model":  model,
+			"input":  "hello, introduce yourself",
+			"stream": true,
 		}
 		if reasoningEffort != "" && reasoningEffort != "none" {
 			rawMap["reasoning"] = map[string]interface{}{
@@ -58,6 +60,7 @@ func GeneratePayloadTemplate(apiType, model, reasoningEffort string) string {
 					"content": "hello, introduce yourself",
 				},
 			},
+			"stream": true,
 		}
 		if reasoningEffort != "" && reasoningEffort != "none" {
 			rawMap["reasoning_effort"] = reasoningEffort
