@@ -27,13 +27,17 @@ Built using the **Charm.sh** ecosystem (`bubbletea`, `lipgloss`, `viewport`, `te
 - **🧠 Flexible Reasoning Effort Shortcuts**:
   - Press `Alt+1` to `Alt+4` to toggle Reasoning Effort (`none`, `low`, `high`, `max`).
   - Automatically formats `reasoning_effort` for OpenAI Chat, `reasoning` for OpenAI Responses, and `output_config.effort` for Anthropic Messages.
-- **📋 One-Click Clipboard Export**:
-  - `Ctrl+Y`: Copy raw Request JSON payload to system clipboard.
-  - `Ctrl+U`: Copy formatted Response JSON payload to system clipboard.
 - **⚡ Real-Time SSE Streaming & Reasoning Process Visualization**:
   - Native support for typewriter-style real-time streaming via HTTP SSE (`text/event-stream`).
-  - Automatically extracts and renders **💭 Thinking Process** and **💬 Response Content** into dedicated TUI sections for reasoning models (DeepSeek-R1, QwQ, Claude 3.7 Thinking, etc.).
-  - Auto-detects GBK / GB2312 encodings to UTF-8 and re-assembles full JSON for instant `Ctrl+U` clipboard export upon completion.
+  - Auto-detects `"stream": true/false` payload mode: Pretty JSON for non-stream, live typewriter display for stream mode with dedicated **💭 Thinking Process** and **💬 Response Content** cards.
+- **🎨 Terminal Glamour Markdown Rendering & Code Syntax Highlighting**:
+  - Integrated Charm `glamour` Markdown renderer engine.
+  - Automatically highlights code blocks (Python, Go, SQL, JSON, etc.), header tags, bold text, and lists.
+- **📐 Responsive Word Wrap & Auto Reflow**:
+  - Dynamically calculates Viewport width and performs real-time text reflow during terminal window resizing, eliminating horizontal border overflow.
+- **🔑 Cross-Platform Lossless Unicode & UTF-8 Clipboard**:
+  - Solves Chinese and Emoji clipboard garbled text issues across Linux (X11 `UTF8_STRING` / Wayland `wl-copy`), WSL (PowerShell UTF-8), macOS, and Windows natively.
+  - `Ctrl+Y`: One-click copy Request Payload; `Ctrl+U`: One-click copy Response JSON.
 
 ---
 

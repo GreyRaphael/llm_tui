@@ -27,13 +27,17 @@
 - **🧠 灵活的 Reasoning Effort 快捷切换**:
   - 按下 `Alt+1` 至 `Alt+4` 可快速切换推理强度（`none`, `low`, `high`, `max`）。
   - 自动适配 OpenAI Chat (`reasoning_effort`)、OpenAI Responses (`reasoning`) 与 Anthropic Messages (`output_config.effort`) 规范。
-- **📋 一键剪贴板导出**:
-  - `Ctrl+Y`: 一键复制原始 Request JSON Payload 到系统剪贴板。
-  - `Ctrl+U`: 一键复制格式化后的 Response JSON 到系统剪贴板。
 - **⚡ 实时 SSE 流式传输与思考过程 (Reasoning Process) 可视化**:
   - 原生支持基于 HTTP SSE (`text/event-stream`) 的打字机式实时流式渲染。
-  - 自动提取并独立展示 DeepSeek-R1、QwQ、Claude 3.7 等推理/思考模型的 **💭 思考过程 (Thinking Process)** 与 **💬 响应内容 (Response Content)**。
-  - 自动识别 GBK / GB2312 字符编码并无缝转换为 UTF-8，流传输结束后自动重构完整 JSON 以供 `Ctrl+U` 剪贴板复制。
+  - 自动识别 `"stream": true/false`：非流式展示 Pretty JSON，流式自动提炼并独立高亮 **💭 思考过程 (Thinking Process)** 与 **💬 响应内容 (Response Content)**。
+- **🎨 终端 Glamour Markdown 渲染与代码高亮**:
+  - 集成 Charm `glamour` 终端 Markdown 渲染引擎。
+  - 为 LLM 输出及思考过程中的代码块（Python, Go, SQL, JSON 等）自动提供语法高亮，优雅展示标题、粗体与列表。
+- **📐 响应视图自适应 Word Wrap 自动折行**:
+  - 动态计算 Viewport 列宽，按窗口大小时实时 Reflow 重排，彻底避免长行溢出穿透框线。
+- **🔑 跨平台无损 Unicode / UTF-8 系统剪贴板**:
+  - 彻底解决 Linux (X11 `UTF8_STRING` / Wayland `wl-copy`), WSL (PowerShell UTF-8), macOS 与 Windows 复制粘贴中文与 Emoji 乱码问题。
+  - `Ctrl+Y` 一键复制 Request Payload，`Ctrl+U` 一键复制完整 Response JSON。
 
 ---
 
