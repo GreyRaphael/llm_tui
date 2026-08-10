@@ -1,0 +1,48 @@
+name: Release Binaries
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  release:
+    name: Build Multi-Platform Binaries & Create Release
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.22'
+          check-latest: true
+          cache: true
+
+      - name: Build Cross-Platform Binaries
+        run: |
+          mkdir -p dist
+          # Linux x86_64
+          GOOS=linux GOARCH=amd64 go build -ldflags="-s -w" -o dist/llm_tui-linux-amd64 .
+          # macOS Apple Silicon (arm64)
+          GOOS=darwin GOARCH=arm64 go build -ldflags="-s -w" -o dist/llm_tui-darwin-arm64 .
+          # macOS Intel (amd64)
+          GOOS=darwin GOARCH=amd64 go build -ldflags="-s -w" -o dist/llm_tui-darwin-amd64 .
+          # Windows x86_64
+          GOOS=windows GOARCH=amd64 go build -ldflags="-s -w" -o dist/llm_tui-windows-amd64.exe .
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/llm_tui-linux-amd64
+            dist/llm_tui-darwin-arm64
+            dist/llm_tui-darwin-amd64
+            dist/llm_tui-windows-amd64.exe
+          generate_release_notes: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
