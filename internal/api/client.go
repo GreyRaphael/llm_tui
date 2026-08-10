@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"golang.org/x/text/encoding/simplifiedchinese"
 	"golang.org/x/text/transform"
@@ -57,7 +58,7 @@ func ExecuteTestRequest(baseURL, apiKey, apiType, payloadJSON string) *TestResul
 		req.Header.Set("Authorization", "Bearer "+apiKey)
 	}
 
-	client := &http.Client{Timeout: 90 * time.Second}
+	client := &http.Client{}
 	startTime := time.Now()
 	resp, err := client.Do(req)
 	res.Latency = time.Since(startTime)
@@ -94,7 +95,7 @@ func ExecuteTestRequest(baseURL, apiKey, apiType, payloadJSON string) *TestResul
 
 func decodeGBKIfNeeded(data []byte) string {
 	// If already valid UTF-8, return directly
-	if json.Valid(data) || isUTF8(data) {
+	if json.Valid(data) || utf8.Valid(data) {
 		return string(data)
 	}
 	// Try converting from GBK to UTF-8
@@ -104,10 +105,6 @@ func decodeGBKIfNeeded(data []byte) string {
 		return string(utf8Bytes)
 	}
 	return string(data)
-}
-
-func isUTF8(data []byte) bool {
-	return bytes.IndexByte(data, 0xff) == -1 && !bytes.Contains(data, []byte{0xc0, 0xaf})
 }
 
 func isSSEResponse(body []byte) bool {

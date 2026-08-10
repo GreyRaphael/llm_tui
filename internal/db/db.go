@@ -16,12 +16,20 @@ type DB struct {
 }
 
 // GetDefaultDBPath calculates the sqlite database file path adjacent to the executable.
-// If running in `go run` or if resolution fails, it falls back to current working directory.
+// If running under `go run` (detected by temp directory heuristics) or if resolution fails,
+// it falls back to current working directory.
 func GetDefaultDBPath() string {
 	exePath, err := os.Executable()
 	if err == nil {
-		// Check if running under `go run` temporary directory
-		if !strings.Contains(exePath, "go-build") && !strings.Contains(exePath, "/tmp/") {
+		// Resolve symlinks for accurate path detection
+		if resolved, resolveErr := filepath.EvalSymlinks(exePath); resolveErr == nil {
+			exePath = resolved
+		}
+		// Heuristic: detect temporary directories used by `go run`.
+		// On Linux/macOS, `go run` compiles to a path containing "go-build".
+		// On Windows, the compiled binary lives under os.TempDir().
+		tempDir := os.TempDir()
+		if !strings.Contains(exePath, "go-build") && !strings.HasPrefix(exePath, tempDir) {
 			dir := filepath.Dir(exePath)
 			return filepath.Join(dir, "providers.db")
 		}

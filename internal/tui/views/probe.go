@@ -94,6 +94,19 @@ func NewProbeModel(database *db.DB) ProbeModel {
 	}
 }
 
+func (m *ProbeModel) Resize(w, h int) {
+	m.Width = w
+	m.Height = h
+	inputWidth := w - 10
+	if inputWidth < 50 {
+		inputWidth = 50
+	}
+	m.BaseURLInput.Width = inputWidth
+	m.APIKeyInput.Width = inputWidth
+	m.NameInput.Width = inputWidth
+	m.ModelInput.Width = inputWidth
+}
+
 func (m ProbeModel) Init() tea.Cmd {
 	return textinput.Blink
 }

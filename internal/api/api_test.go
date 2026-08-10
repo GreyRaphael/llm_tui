@@ -177,7 +177,7 @@ func TestProbeProviderAndExecute(t *testing.T) {
 	}
 
 	// Execute Test Request
-	payload := GeneratePayloadTemplate(APITypeOpenAIChat, "gpt-4o", "medium")
+	payload := GeneratePayloadTemplate(APITypeOpenAIChat, "gpt-4o", "high")
 	testRes := ExecuteTestRequest(server.URL, "sk-test-key", APITypeOpenAIChat, payload)
 	if testRes.Error != "" {
 		t.Fatalf("ExecuteTestRequest error: %s", testRes.Error)

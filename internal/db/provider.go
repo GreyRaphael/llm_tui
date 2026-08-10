@@ -7,13 +7,6 @@ import (
 	"time"
 )
 
-// APIType constants
-const (
-	APITypeOpenAIChat      = "openai_chat"
-	APITypeOpenAIResponses = "openai_responses"
-	APITypeAnthropic       = "anthropic_messages"
-)
-
 // ReasoningEffort constants
 const (
 	ReasoningEffortNone = "none"
@@ -97,6 +90,9 @@ func (d *DB) ListRecords() ([]ProviderRecord, error) {
 			rec.CustomPayload = customPayload.String
 		}
 		records = append(records, rec)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("error iterating provider records: %w", err)
 	}
 	return records, nil
 }

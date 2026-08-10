@@ -38,12 +38,6 @@ var (
 			Padding(0, 1).
 			MarginBottom(1)
 
-	ActiveCardStyle = lipgloss.NewStyle().
-			Border(lipgloss.RoundedBorder()).
-			BorderForeground(ColorSecondary).
-			Padding(0, 1).
-			MarginBottom(1)
-
 	BadgeStyle = lipgloss.NewStyle().
 			Foreground(lipgloss.Color("#FFFFFF")).
 			Background(ColorMuted).

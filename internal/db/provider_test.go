@@ -16,7 +16,7 @@ func TestProviderRecordCRUD(t *testing.T) {
 		Name:            "DeepSeek Chat",
 		BaseURL:         "https://api.deepseek.com",
 		APIKey:          "sk-test123",
-		APIType:         APITypeOpenAIChat,
+		APIType:         "openai_chat",
 		Model:           "deepseek-chat",
 		ReasoningEffort: ReasoningEffortNone,
 	}
@@ -64,7 +64,7 @@ func TestProviderRecordCRUD(t *testing.T) {
 		Name:            "DeepSeek Reasoner (High)",
 		BaseURL:         "https://api.deepseek.com",
 		APIKey:          "sk-test123",
-		APIType:         APITypeOpenAIChat,
+		APIType:         "openai_chat",
 		Model:           "deepseek-reasoner",
 		ReasoningEffort: ReasoningEffortHigh,
 	}

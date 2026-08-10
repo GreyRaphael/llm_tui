@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strings"
 
+	"llm_tui/internal/api"
 	"llm_tui/internal/db"
 	"llm_tui/internal/tui/styles"
 
@@ -13,13 +14,14 @@ import (
 
 // ManagerModel represents the provider list and CRUD manager view
 type ManagerModel struct {
-	DB        *db.DB
-	Records   []db.ProviderRecord
-	Cursor    int
-	Width     int
-	Height    int
-	StatusMsg string
-	IsError   bool
+	DB            *db.DB
+	Records       []db.ProviderRecord
+	Cursor        int
+	Width         int
+	Height        int
+	StatusMsg     string
+	IsError       bool
+	ConfirmDelete bool
 }
 
 func NewManagerModel(database *db.DB) ManagerModel {
@@ -52,6 +54,13 @@ func (m ManagerModel) Update(msg tea.Msg) (ManagerModel, tea.Cmd, string) {
 
 	switch msg := msg.(type) {
 	case tea.KeyMsg:
+		// Cancel delete confirmation on any key except 'd'
+		if m.ConfirmDelete && msg.String() != "d" {
+			m.ConfirmDelete = false
+			m.StatusMsg = ""
+			m.IsError = false
+		}
+
 		switch msg.String() {
 		case "k", "up":
 			if m.Cursor > 0 {
@@ -69,15 +78,24 @@ func (m ManagerModel) Update(msg tea.Msg) (ManagerModel, tea.Cmd, string) {
 			}
 		case "d":
 			if len(m.Records) > 0 && m.Cursor < len(m.Records) {
-				target := m.Records[m.Cursor]
-				err := m.DB.DeleteRecord(target.ID)
-				if err != nil {
-					m.StatusMsg = fmt.Sprintf("Failed to delete record: %v", err)
-					m.IsError = true
+				if m.ConfirmDelete {
+					// Second press: actually delete
+					target := m.Records[m.Cursor]
+					err := m.DB.DeleteRecord(target.ID)
+					if err != nil {
+						m.StatusMsg = fmt.Sprintf("Failed to delete record: %v", err)
+						m.IsError = true
+					} else {
+						m.StatusMsg = fmt.Sprintf("Deleted record '%s'", target.Name)
+						m.IsError = false
+						m.RefreshRecords()
+					}
+					m.ConfirmDelete = false
 				} else {
-					m.StatusMsg = fmt.Sprintf("Deleted record '%s'", target.Name)
-					m.IsError = false
-					m.RefreshRecords()
+					// First press: ask for confirmation
+					m.ConfirmDelete = true
+					m.StatusMsg = fmt.Sprintf("⚠️  Press 'd' again to confirm deleting '%s'", m.Records[m.Cursor].Name)
+					m.IsError = true
 				}
 			}
 		case "q":
@@ -140,9 +158,9 @@ func (m ManagerModel) View() string {
 			// Badge style according to api_type
 			var apiTypeBadge string
 			switch r.APIType {
-			case db.APITypeAnthropic:
+			case api.APITypeAnthropic:
 				apiTypeBadge = styles.BadgeAccentStyle.Render("Anthropic Messages")
-			case db.APITypeOpenAIResponses:
+			case api.APITypeOpenAIResponses:
 				apiTypeBadge = styles.BadgeSuccessStyle.Render("OpenAI Responses")
 			default:
 				apiTypeBadge = styles.BadgeStyle.Render("OpenAI Chat")

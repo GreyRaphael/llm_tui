@@ -47,9 +47,10 @@ func (m AppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.Height = msg.Height
 		m.ManagerView.Width = msg.Width
 		m.ManagerView.Height = msg.Height
-		m.ProbeView.Width = msg.Width
-		m.ProbeView.Height = msg.Height
-		if m.Screen == ScreenTester {
+		switch m.Screen {
+		case ScreenProbe:
+			m.ProbeView.Resize(msg.Width, msg.Height)
+		case ScreenTester:
 			m.TesterView.Resize(msg.Width, msg.Height)
 		}
 
@@ -69,8 +70,9 @@ func (m AppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		switch action {
 		case "probe_new":
 			m.ProbeView = views.NewProbeModel(m.DB)
-			m.ProbeView.Width = m.Width
-			m.ProbeView.Height = m.Height
+			if m.Width > 0 && m.Height > 0 {
+				m.ProbeView.Resize(m.Width, m.Height)
+			}
 			m.Screen = ScreenProbe
 			return m, m.ProbeView.Init()
 		case "open_tester":

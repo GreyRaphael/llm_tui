@@ -84,9 +84,6 @@ func NewTesterModel(database *db.DB, record db.ProviderRecord) TesterModel {
 }
 
 func (m *TesterModel) Resize(w, h int) {
-	if m.DB == nil {
-		return
-	}
 	m.Width = w
 	m.Height = h
 
@@ -172,7 +169,7 @@ func (m TesterModel) Update(msg tea.Msg) (TesterModel, tea.Cmd, string) {
 			action = "back_to_manager"
 			return m, nil, action
 
-		case "m", "ctrl+m":
+		case "alt+m":
 			if len(m.DiscoveredModels) > 0 {
 				m.SelectingModel = true
 			} else {
@@ -190,7 +187,7 @@ func (m TesterModel) Update(msg tea.Msg) (TesterModel, tea.Cmd, string) {
 			}
 			return m, textarea.Blink, ""
 
-		// Always copy Request JSON with Ctrl+Y
+		// Copy Request JSON with Ctrl+Y
 		case "ctrl+y":
 			reqPayload := m.Textarea.Value()
 			if reqPayload != "" {
@@ -203,9 +200,9 @@ func (m TesterModel) Update(msg tea.Msg) (TesterModel, tea.Cmd, string) {
 				return m, nil, ""
 			}
 
-		// Copy Response JSON when in PaneResponse or with c/y
-		case "c", "y":
-			if m.ActivePane == PaneResponse && m.LastResult != nil && m.LastResult.FormattedBody != "" {
+		// Copy Response JSON with Ctrl+U
+		case "ctrl+u":
+			if m.LastResult != nil && m.LastResult.FormattedBody != "" {
 				err := clipboard.WriteAll(m.LastResult.FormattedBody)
 				if err == nil {
 					m.CopyStatusMsg = "📋 Response JSON copied to clipboard!"
@@ -236,21 +233,19 @@ func (m TesterModel) Update(msg tea.Msg) (TesterModel, tea.Cmd, string) {
 
 			return m, tea.Batch(m.Spinner.Tick, m.runExecuteCmd()), ""
 
-		case "1", "2", "3", "4":
-			if m.ActivePane == PaneRequest {
-				switch msg.String() {
-				case "1":
-					m.ReasoningEffort = db.ReasoningEffortNone
-				case "2":
-					m.ReasoningEffort = db.ReasoningEffortLow
-				case "3":
-					m.ReasoningEffort = db.ReasoningEffortHigh
-				case "4":
-					m.ReasoningEffort = db.ReasoningEffortMax
-				}
-				m.Textarea.SetValue(api.GeneratePayloadTemplate(m.Record.APIType, m.Record.Model, m.ReasoningEffort))
-				return m, nil, ""
+		case "alt+1", "alt+2", "alt+3", "alt+4":
+			switch msg.String() {
+			case "alt+1":
+				m.ReasoningEffort = db.ReasoningEffortNone
+			case "alt+2":
+				m.ReasoningEffort = db.ReasoningEffortLow
+			case "alt+3":
+				m.ReasoningEffort = db.ReasoningEffortHigh
+			case "alt+4":
+				m.ReasoningEffort = db.ReasoningEffortMax
 			}
+			m.Textarea.SetValue(api.GeneratePayloadTemplate(m.Record.APIType, m.Record.Model, m.ReasoningEffort))
+			return m, nil, ""
 		}
 	}
 
@@ -459,7 +454,7 @@ func (m TesterModel) View() string {
 
 	// Help Footer
 	helpKey := styles.HelpStyle.Render(
-		"[Ctrl+S] Send  [Ctrl+Y] Copy Request  [c/y] Copy Response  [PgUp/PgDn] Page Scroll  [m] Switch Model  [Tab] Switch Pane  [1-4] Reasoning Effort  [Esc] Manager",
+		"[Ctrl+S] Send  [Ctrl+Y] Copy Req  [Ctrl+U] Copy Resp  [PgUp/PgDn] Scroll  [Alt+M] Model  [Tab] Pane  [Alt+1~4] Reasoning  [Esc] Manager",
 	)
 	sb.WriteString(helpKey)
 
