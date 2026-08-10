@@ -29,7 +29,25 @@ func TestProviderRecordCRUD(t *testing.T) {
 		t.Fatalf("expected non-zero ID after insert")
 	}
 
-	// 2. Test List
+	// 2. Test GetAPIKeyByBaseURL
+	key := database.GetAPIKeyByBaseURL("https://api.deepseek.com")
+	if key != "sk-test123" {
+		t.Errorf("expected API key 'sk-test123', got '%s'", key)
+	}
+
+	// Test variant base_url match (trailing slash)
+	keyVariant := database.GetAPIKeyByBaseURL("https://api.deepseek.com/")
+	if keyVariant != "sk-test123" {
+		t.Errorf("expected API key 'sk-test123' for variant URL, got '%s'", keyVariant)
+	}
+
+	// Test /v1 variant base_url match
+	keyV1 := database.GetAPIKeyByBaseURL("https://api.deepseek.com/v1")
+	if keyV1 != "sk-test123" {
+		t.Errorf("expected API key 'sk-test123' for /v1 variant URL, got '%s'", keyV1)
+	}
+
+	// 3. Test List
 	records, err := database.ListRecords()
 	if err != nil {
 		t.Fatalf("ListRecords failed: %v", err)
@@ -41,7 +59,7 @@ func TestProviderRecordCRUD(t *testing.T) {
 		t.Errorf("expected name 'DeepSeek Chat', got '%s'", records[0].Name)
 	}
 
-	// 3. Test Create multiple for same base_url with different models & api_types
+	// 4. Test Create multiple for same base_url with different models & api_types
 	rec2 := &ProviderRecord{
 		Name:            "DeepSeek Reasoner (High)",
 		BaseURL:         "https://api.deepseek.com",
@@ -63,7 +81,7 @@ func TestProviderRecordCRUD(t *testing.T) {
 		t.Fatalf("expected 2 records, got %d", len(records))
 	}
 
-	// 4. Test GetByID
+	// 5. Test GetByID
 	fetched, err := database.GetRecordByID(rec1.ID)
 	if err != nil {
 		t.Fatalf("GetRecordByID failed: %v", err)
@@ -72,7 +90,7 @@ func TestProviderRecordCRUD(t *testing.T) {
 		t.Fatalf("GetRecordByID got wrong record: %+v", fetched)
 	}
 
-	// 5. Test Update
+	// 6. Test Update
 	fetched.Name = "DeepSeek Chat Updated"
 	fetched.ReasoningEffort = ReasoningEffortLow
 	err = database.UpdateRecord(fetched)
@@ -88,7 +106,7 @@ func TestProviderRecordCRUD(t *testing.T) {
 		t.Fatalf("Update record verification failed: %+v", updated)
 	}
 
-	// 6. Test Delete
+	// 7. Test Delete
 	err = database.DeleteRecord(rec1.ID)
 	if err != nil {
 		t.Fatalf("DeleteRecord failed: %v", err)

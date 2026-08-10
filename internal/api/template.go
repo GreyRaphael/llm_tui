@@ -27,31 +27,21 @@ func GeneratePayloadTemplate(apiType, model, reasoningEffort string) string {
 			"messages": []map[string]interface{}{
 				{
 					"role":    "user",
-					"content": "Hello, please explain how quantum computing works in 2 sentences.",
+					"content": "hello, introduce yourself",
 				},
 			},
 			"max_tokens": 1024,
 		}
 		if reasoningEffort != "" && reasoningEffort != "none" {
-			budget := 1024
-			switch reasoningEffort {
-			case "low":
-				budget = 512
-			case "medium":
-				budget = 1024
-			case "high":
-				budget = 2048
-			}
-			rawMap["thinking"] = map[string]interface{}{
-				"type":          "enabled",
-				"budget_tokens": budget,
+			rawMap["output_config"] = map[string]interface{}{
+				"effort": reasoningEffort,
 			}
 		}
 
 	case APITypeOpenAIResponses:
 		rawMap = map[string]interface{}{
 			"model": model,
-			"input": "Hello, please explain how quantum computing works in 2 sentences.",
+			"input": "hello, introduce yourself",
 		}
 		if reasoningEffort != "" && reasoningEffort != "none" {
 			rawMap["reasoning"] = map[string]interface{}{
@@ -65,10 +55,9 @@ func GeneratePayloadTemplate(apiType, model, reasoningEffort string) string {
 			"messages": []map[string]interface{}{
 				{
 					"role":    "user",
-					"content": "Hello, please explain how quantum computing works in 2 sentences.",
+					"content": "hello, introduce yourself",
 				},
 			},
-			"temperature": 0.7,
 		}
 		if reasoningEffort != "" && reasoningEffort != "none" {
 			rawMap["reasoning_effort"] = reasoningEffort

@@ -58,10 +58,10 @@ func ProbeProviderWithModel(baseURL, apiKey, modelName string) (*ProbeResult, er
 		modelName = "gpt-4o"
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 12*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 35*time.Second)
 	defer cancel()
 
-	client := &http.Client{Timeout: 10 * time.Second}
+	client := &http.Client{Timeout: 30 * time.Second}
 
 	var wg sync.WaitGroup
 	var mu sync.Mutex
@@ -86,7 +86,6 @@ func ProbeProviderWithModel(baseURL, apiKey, modelName string) (*ProbeResult, er
 			"messages": []map[string]string{
 				{"role": "user", "content": "hi"},
 			},
-			"max_tokens": 1,
 		})
 
 		supported, msg := probeEndpoint(ctx, client, urls, "Authorization", "Bearer "+apiKey, payload)
@@ -101,7 +100,6 @@ func ProbeProviderWithModel(baseURL, apiKey, modelName string) (*ProbeResult, er
 		payload, _ := json.Marshal(map[string]interface{}{
 			"model": modelName,
 			"input": "hi",
-			"max_output_tokens": 1,
 		})
 
 		supported, msg := probeEndpoint(ctx, client, urls, "Authorization", "Bearer "+apiKey, payload)
@@ -118,7 +116,7 @@ func ProbeProviderWithModel(baseURL, apiKey, modelName string) (*ProbeResult, er
 			"messages": []map[string]string{
 				{"role": "user", "content": "hi"},
 			},
-			"max_tokens": 1,
+			"max_tokens": 16,
 		})
 
 		supported, msg := probeEndpointAnthropic(ctx, client, urls, apiKey, payload)
@@ -175,12 +173,6 @@ func probeEndpoint(ctx context.Context, client *http.Client, urls []string, auth
 			errSnippet = fmt.Sprintf("%d %s", resp.StatusCode, errSnippet)
 		}
 
-		if resp.StatusCode == http.StatusBadRequest || resp.StatusCode == http.StatusUnprocessableEntity {
-			if strings.Contains(bodyStr, "choices") || strings.Contains(bodyStr, "invalid_request_error") || strings.Contains(bodyStr, "model") {
-				return true, errSnippet
-			}
-		}
-
 		lastStatus = errSnippet
 	}
 	return false, lastStatus
@@ -217,12 +209,6 @@ func probeEndpointAnthropic(ctx context.Context, client *http.Client, urls []str
 			errSnippet = fmt.Sprintf("%d %s", resp.StatusCode, errSnippet)
 		}
 
-		if resp.StatusCode == http.StatusBadRequest || resp.StatusCode == http.StatusUnprocessableEntity {
-			if strings.Contains(bodyStr, "type") && (strings.Contains(bodyStr, "invalid_request_error") || strings.Contains(bodyStr, "authentication_error")) {
-				return true, errSnippet
-			}
-		}
-
 		lastStatus = errSnippet
 	}
 	return false, lastStatus
@@ -257,7 +243,7 @@ func FetchModels(baseURL, apiKey string) ([]string, error) {
 	}
 
 	urls := BuildEndpointURLs(norm, "/models")
-	client := &http.Client{Timeout: 6 * time.Second}
+	client := &http.Client{Timeout: 15 * time.Second}
 
 	for _, targetURL := range urls {
 		req, err := http.NewRequest("GET", targetURL, nil)

@@ -49,11 +49,15 @@ func (m AppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.ManagerView.Height = msg.Height
 		m.ProbeView.Width = msg.Width
 		m.ProbeView.Height = msg.Height
-		m.TesterView.Width = msg.Width
-		m.TesterView.Height = msg.Height
+		if m.Screen == ScreenTester {
+			m.TesterView.Resize(msg.Width, msg.Height)
+		}
 
 	case tea.KeyMsg:
 		if msg.String() == "ctrl+c" {
+			return m, tea.Quit
+		}
+		if m.Screen == ScreenManager && msg.String() == "q" {
 			return m, tea.Quit
 		}
 	}
@@ -65,15 +69,22 @@ func (m AppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		switch action {
 		case "probe_new":
 			m.ProbeView = views.NewProbeModel(m.DB)
+			m.ProbeView.Width = m.Width
+			m.ProbeView.Height = m.Height
 			m.Screen = ScreenProbe
 			return m, m.ProbeView.Init()
 		case "open_tester":
 			rec := m.ManagerView.SelectedRecord()
 			if rec != nil {
 				m.TesterView = views.NewTesterModel(m.DB, *rec)
+				if m.Width > 0 && m.Height > 0 {
+					m.TesterView.Resize(m.Width, m.Height)
+				}
 				m.Screen = ScreenTester
 				return m, m.TesterView.Init()
 			}
+		case "quit":
+			return m, tea.Quit
 		}
 
 	case ScreenProbe:

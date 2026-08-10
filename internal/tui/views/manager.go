@@ -13,13 +13,13 @@ import (
 
 // ManagerModel represents the provider list and CRUD manager view
 type ManagerModel struct {
-	DB          *db.DB
-	Records     []db.ProviderRecord
-	Cursor      int
-	Width       int
-	Height      int
-	StatusMsg   string
-	IsError     bool
+	DB        *db.DB
+	Records   []db.ProviderRecord
+	Cursor    int
+	Width     int
+	Height    int
+	StatusMsg string
+	IsError   bool
 }
 
 func NewManagerModel(database *db.DB) ManagerModel {
@@ -72,7 +72,7 @@ func (m ManagerModel) Update(msg tea.Msg) (ManagerModel, tea.Cmd, string) {
 				target := m.Records[m.Cursor]
 				err := m.DB.DeleteRecord(target.ID)
 				if err != nil {
-					m.StatusMsg = fmt.Sprintf("Failed to delete record #%d: %v", target.ID, err)
+					m.StatusMsg = fmt.Sprintf("Failed to delete record: %v", err)
 					m.IsError = true
 				} else {
 					m.StatusMsg = fmt.Sprintf("Deleted record '%s'", target.Name)
@@ -80,10 +80,8 @@ func (m ManagerModel) Update(msg tea.Msg) (ManagerModel, tea.Cmd, string) {
 					m.RefreshRecords()
 				}
 			}
-		case "r":
-			m.RefreshRecords()
-			m.StatusMsg = "Records refreshed"
-			m.IsError = false
+		case "q":
+			action = "quit"
 		}
 	}
 
@@ -111,8 +109,25 @@ func (m ManagerModel) View() string {
 		}
 	}
 
+	cardWidth := m.Width - 6
+	if cardWidth < 60 {
+		cardWidth = 72
+	}
+
+	normalCardStyle := lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(styles.ColorMuted).
+		Padding(0, 1).
+		Width(cardWidth)
+
+	activeCardStyle := lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(styles.ColorSecondary).
+		Padding(0, 1).
+		Width(cardWidth)
+
 	if len(m.Records) == 0 {
-		emptyCard := styles.CardStyle.Render(
+		emptyCard := normalCardStyle.Render(
 			lipgloss.NewStyle().Foreground(styles.ColorMuted).Render(
 				"No LLM Providers configured.\nPress 'n' to enter Base URL & API Key for auto-detection probing.",
 			),
@@ -133,28 +148,34 @@ func (m ManagerModel) View() string {
 				apiTypeBadge = styles.BadgeStyle.Render("OpenAI Chat")
 			}
 
-			reasoningText := fmt.Sprintf("Reasoning: %s", r.ReasoningEffort)
+			pointer := "  "
+			if isCurrent {
+				pointer = "👉"
+			}
 
-			cardContent := fmt.Sprintf(
-				"%s %s\n%s | Model: %s | %s\nKey: %s",
-				styles.SubtitleStyle.Render(fmt.Sprintf("#%d %s", r.ID, r.Name)),
-				apiTypeBadge,
+			// Display sequential 1-indexed number (#1, #2, #3...) ordered by updated_at
+			title := fmt.Sprintf("%s #%d %s", pointer, i+1, r.Name)
+			line1 := fmt.Sprintf("%s  %s", styles.SubtitleStyle.Render(title), apiTypeBadge)
+			line2 := fmt.Sprintf(
+				"URL: %s | Model: %s | Reasoning: %s",
 				lipgloss.NewStyle().Foreground(styles.ColorText).Render(r.BaseURL),
 				styles.MetricValueStyle.Render(r.Model),
-				styles.MetricLabelStyle.Render(reasoningText),
-				lipgloss.NewStyle().Foreground(styles.ColorMuted).Render(maskAPIKey(r.APIKey)),
+				styles.MetricLabelStyle.Render(r.ReasoningEffort),
 			)
+			line3 := fmt.Sprintf("Key: %s", lipgloss.NewStyle().Foreground(styles.ColorMuted).Render(maskAPIKey(r.APIKey)))
+
+			cardContent := fmt.Sprintf("%s\n%s\n%s", line1, line2, line3)
 
 			if isCurrent {
-				sb.WriteString("👉 " + styles.ActiveCardStyle.Render(cardContent) + "\n")
+				sb.WriteString(activeCardStyle.Render(cardContent) + "\n")
 			} else {
-				sb.WriteString("   " + styles.CardStyle.Render(cardContent) + "\n")
+				sb.WriteString(normalCardStyle.Render(cardContent) + "\n")
 			}
 		}
 	}
 
 	helpKey := styles.HelpStyle.Render(
-		"[n] Add/Probe Provider  [Enter/t] Start Chat Test  [d] Delete Record  [r] Refresh  [q] Quit",
+		"[n] New Provider  [Enter/t] Test Laboratory  [d] Delete Record  [q] Quit App",
 	)
 	sb.WriteString("\n" + helpKey)
 
@@ -163,7 +184,7 @@ func (m ManagerModel) View() string {
 
 func maskAPIKey(key string) string {
 	if len(key) <= 8 {
-		return "********"
+		return "******"
 	}
 	return key[:4] + "..." + key[len(key)-4:]
 }

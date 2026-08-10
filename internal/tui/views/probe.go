@@ -42,6 +42,7 @@ type ProbeModel struct {
 	APITypeCursor    int
 	StatusMsg        string
 	IsError          bool
+	AutofilledKey    bool
 }
 
 type modelsFetchedMsg struct {
@@ -153,11 +154,13 @@ func (m ProbeModel) Update(msg tea.Msg) (ProbeModel, tea.Cmd, string) {
 					m.APIKeyInput.Blur()
 					m.BaseURLInput.Focus()
 				}
+				m.checkAutofillAPIKey()
 			}
 
 		case "enter":
 			switch m.Step {
 			case StepInputCredentials:
+				m.checkAutofillAPIKey()
 				if strings.TrimSpace(m.BaseURLInput.Value()) == "" || strings.TrimSpace(m.APIKeyInput.Value()) == "" {
 					m.StatusMsg = "Please enter both Base URL and API Key"
 					m.IsError = true
@@ -248,6 +251,7 @@ func (m ProbeModel) Update(msg tea.Msg) (ProbeModel, tea.Cmd, string) {
 	case StepInputCredentials:
 		if m.FocusIndex == 0 {
 			m.BaseURLInput, cmd = m.BaseURLInput.Update(msg)
+			m.checkAutofillAPIKey()
 		} else {
 			m.APIKeyInput, cmd = m.APIKeyInput.Update(msg)
 		}
@@ -260,6 +264,23 @@ func (m ProbeModel) Update(msg tea.Msg) (ProbeModel, tea.Cmd, string) {
 	}
 
 	return m, cmd, action
+}
+
+func (m *ProbeModel) checkAutofillAPIKey() {
+	if m.Step != StepInputCredentials {
+		return
+	}
+	baseURL := strings.TrimSpace(m.BaseURLInput.Value())
+	if baseURL == "" {
+		return
+	}
+	existingKey := m.DB.GetAPIKeyByBaseURL(baseURL)
+	if existingKey != "" && (m.APIKeyInput.Value() == "" || m.AutofilledKey) {
+		m.APIKeyInput.SetValue(existingKey)
+		m.AutofilledKey = true
+		m.StatusMsg = "🔑 Auto-filled API Key from existing records (press Tab to modify or keep)."
+		m.IsError = false
+	}
 }
 
 func (m ProbeModel) runFetchModelsCmd() tea.Cmd {
@@ -309,17 +330,36 @@ func (m ProbeModel) View() string {
 		sb.WriteString(styles.SubtitleStyle.Render("2. Select or Specify Target Model") + "\n\n")
 		if len(m.DiscoveredModels) > 0 {
 			sb.WriteString(styles.MetricLabelStyle.Render("Discovered Models List (Use ↑/↓ to navigate):") + "\n")
-			maxShow := 6
-			for i, md := range m.DiscoveredModels {
-				if i >= maxShow {
-					sb.WriteString(fmt.Sprintf("   ... and %d more models\n", len(m.DiscoveredModels)-maxShow))
-					break
+			totalModels := len(m.DiscoveredModels)
+			maxVisible := 20
+
+			startIdx := m.ModelCursor - maxVisible/2
+			if startIdx < 0 {
+				startIdx = 0
+			}
+			endIdx := startIdx + maxVisible
+			if endIdx > totalModels {
+				endIdx = totalModels
+				startIdx = endIdx - maxVisible
+				if startIdx < 0 {
+					startIdx = 0
 				}
+			}
+
+			if startIdx > 0 {
+				sb.WriteString(fmt.Sprintf("   ▲ %d models above...\n", startIdx))
+			}
+
+			for i := startIdx; i < endIdx; i++ {
 				prefix := "  "
 				if i == m.ModelCursor {
 					prefix = "👉"
 				}
-				sb.WriteString(fmt.Sprintf("%s %s\n", prefix, styles.MetricValueStyle.Render(md)))
+				sb.WriteString(fmt.Sprintf("%s %s\n", prefix, styles.MetricValueStyle.Render(m.DiscoveredModels[i])))
+			}
+
+			if endIdx < totalModels {
+				sb.WriteString(fmt.Sprintf("   ▼ %d models below...\n", totalModels-endIdx))
 			}
 			sb.WriteString("\n")
 		}

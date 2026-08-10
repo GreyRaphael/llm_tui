@@ -47,24 +47,75 @@ func TestGeneratePayloadTemplate(t *testing.T) {
 		t.Errorf("expected reasoning_effort 'high', got %v", generic["reasoning_effort"])
 	}
 
-	// 2. OpenAI Responses with Reasoning Effort Medium
-	payloadResponses := GeneratePayloadTemplate(APITypeOpenAIResponses, "gpt-4o", "medium")
+	// 1b. OpenAI Chat with Reasoning Effort None (should omit reasoning_effort)
+	payloadNone := GeneratePayloadTemplate(APITypeOpenAIChat, "gpt-4o", "none")
+	var genericNone map[string]interface{}
+	if err := json.Unmarshal([]byte(payloadNone), &genericNone); err != nil {
+		t.Fatalf("failed to unmarshal none payload: %v", err)
+	}
+	if _, ok := genericNone["reasoning_effort"]; ok {
+		t.Errorf("expected reasoning_effort to be omitted when effort is 'none', got %v", genericNone["reasoning_effort"])
+	}
+
+	// 2. OpenAI Responses with Reasoning Effort Max
+	payloadResponses := GeneratePayloadTemplate(APITypeOpenAIResponses, "gpt-4o", "max")
 	if err := json.Unmarshal([]byte(payloadResponses), &generic); err != nil {
 		t.Fatalf("failed to unmarshal responses payload: %v", err)
 	}
 	reasoning, ok := generic["reasoning"].(map[string]interface{})
-	if !ok || reasoning["effort"] != "medium" {
-		t.Errorf("expected reasoning.effort 'medium', got %v", generic["reasoning"])
+	if !ok || reasoning["effort"] != "max" {
+		t.Errorf("expected reasoning.effort 'max', got %v", generic["reasoning"])
 	}
 
-	// 3. Anthropic with Thinking High
+	// 3. Anthropic with Output Config Effort High
 	payloadAnthropic := GeneratePayloadTemplate(APITypeAnthropic, "claude-3-5-sonnet-20241022", "high")
 	if err := json.Unmarshal([]byte(payloadAnthropic), &generic); err != nil {
 		t.Fatalf("failed to unmarshal anthropic payload: %v", err)
 	}
-	thinking, ok := generic["thinking"].(map[string]interface{})
-	if !ok || thinking["budget_tokens"] != float64(2048) {
-		t.Errorf("expected thinking budget_tokens 2048, got %v", generic["thinking"])
+	outputConfig, ok := generic["output_config"].(map[string]interface{})
+	if !ok || outputConfig["effort"] != "high" {
+		t.Errorf("expected output_config.effort 'high', got %v", generic["output_config"])
+	}
+	if _, ok := generic["thinking"]; ok {
+		t.Errorf("expected thinking parameter to be omitted in Anthropic payload, got %v", generic["thinking"])
+	}
+
+	// 3b. Anthropic with Reasoning Effort None
+	payloadAnthropicNone := GeneratePayloadTemplate(APITypeAnthropic, "claude-3-5-sonnet-20241022", "none")
+	var genericAnthropicNone map[string]interface{}
+	if err := json.Unmarshal([]byte(payloadAnthropicNone), &genericAnthropicNone); err != nil {
+		t.Fatalf("failed to unmarshal anthropic none payload: %v", err)
+	}
+	if _, ok := genericAnthropicNone["output_config"]; ok {
+		t.Errorf("expected output_config to be omitted when effort is 'none', got %v", genericAnthropicNone["output_config"])
+	}
+}
+
+func TestSSEResponseAssembly(t *testing.T) {
+	sseChunkData := `data:{"model":"glm-5.2","id":"chatcmpl-123","choices":[{"delta":{"content":"Hello! I am ","reasoning_content":"Thinking... "}}]}
+data:{"model":"glm-5.2","id":"chatcmpl-123","choices":[{"delta":{"content":"GLM model.","reasoning_content":"Done thinking."}}]}
+data:{"model":"glm-5.2","id":"chatcmpl-123","choices":[],"usage":{"prompt_tokens":16,"completion_tokens":236,"total_tokens":252}}
+data:[DONE]`
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(sseChunkData))
+	}))
+	defer server.Close()
+
+	res := ExecuteTestRequest(server.URL, "sk-dummy-key", APITypeOpenAIChat, `{"model":"glm-5.2"}`)
+	if res.StatusCode != 200 {
+		t.Fatalf("expected HTTP 200, got %d", res.StatusCode)
+	}
+	if res.PromptTokens != 16 || res.CompletionTokens != 236 || res.TotalTokens != 252 {
+		t.Errorf("unexpected SSE tokens assembly: %+v", res)
+	}
+	if !strings.Contains(res.FormattedBody, "Hello! I am GLM model.") {
+		t.Errorf("expected assembled content text, got %s", res.FormattedBody)
+	}
+	if !strings.Contains(res.FormattedBody, "Thinking... Done thinking.") {
+		t.Errorf("expected assembled reasoning_content text, got %s", res.FormattedBody)
 	}
 }
 

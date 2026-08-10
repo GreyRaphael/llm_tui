@@ -3,6 +3,7 @@ package db
 import (
 	"database/sql"
 	"fmt"
+	"strings"
 	"time"
 )
 
@@ -15,10 +16,10 @@ const (
 
 // ReasoningEffort constants
 const (
-	ReasoningEffortNone   = "none"
-	ReasoningEffortLow    = "low"
-	ReasoningEffortMedium = "medium"
-	ReasoningEffortHigh   = "high"
+	ReasoningEffortNone = "none"
+	ReasoningEffortLow  = "low"
+	ReasoningEffortHigh = "high"
+	ReasoningEffortMax  = "max"
 )
 
 // ProviderRecord represents a saved configuration record in SQLite
@@ -60,12 +61,12 @@ func (d *DB) CreateRecord(rec *ProviderRecord) error {
 	return nil
 }
 
-// ListRecords fetches all provider records ordered by updated_at DESC
+// ListRecords fetches all provider records ordered by updated_at DESC, id DESC
 func (d *DB) ListRecords() ([]ProviderRecord, error) {
 	query := `
 	SELECT id, name, base_url, api_key, api_type, model, reasoning_effort, custom_payload, created_at, updated_at
 	FROM provider_records
-	ORDER BY updated_at DESC;
+	ORDER BY updated_at DESC, id DESC;
 	`
 	rows, err := d.Query(query)
 	if err != nil {
@@ -132,6 +133,29 @@ func (d *DB) GetRecordByID(id int64) (*ProviderRecord, error) {
 		rec.CustomPayload = customPayload.String
 	}
 	return &rec, nil
+}
+
+// GetAPIKeyByBaseURL searches existing provider records for a matching base_url and returns saved APIKey
+func (d *DB) GetAPIKeyByBaseURL(baseURL string) string {
+	raw := strings.TrimSpace(baseURL)
+	if raw == "" {
+		return ""
+	}
+	normTrim := strings.TrimRight(raw, "/")
+	withoutV1 := strings.TrimSuffix(normTrim, "/v1")
+	withV1 := normTrim + "/v1"
+
+	query := `
+	SELECT api_key FROM provider_records
+	WHERE base_url = ? OR base_url = ? OR base_url = ? OR base_url = ? OR base_url = ?
+	ORDER BY updated_at DESC LIMIT 1;
+	`
+	var apiKey string
+	err := d.QueryRow(query, raw, normTrim, normTrim+"/", withoutV1, withV1).Scan(&apiKey)
+	if err == nil && apiKey != "" {
+		return apiKey
+	}
+	return ""
 }
 
 // UpdateRecord updates an existing provider record
