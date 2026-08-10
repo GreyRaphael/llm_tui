@@ -26,25 +26,26 @@ jobs:
         run: |
           mkdir -p dist/bin
           VERSION="${GITHUB_REF_NAME}"
+          LDFLAGS="-X main.Version=${VERSION} -s -w"
 
           # 1. Linux amd64
-          GOOS=linux GOARCH=amd64 go build -ldflags="-s -w" -o dist/llm_tui-linux-amd64 .
+          GOOS=linux GOARCH=amd64 go build -ldflags="${LDFLAGS}" -o dist/llm_tui-linux-amd64 .
           tar -czvf dist/llm_tui-${VERSION}-linux-amd64.tar.gz -C dist llm_tui-linux-amd64
 
           # 2. Linux arm64
-          GOOS=linux GOARCH=arm64 go build -ldflags="-s -w" -o dist/llm_tui-linux-arm64 .
+          GOOS=linux GOARCH=arm64 go build -ldflags="${LDFLAGS}" -o dist/llm_tui-linux-arm64 .
           tar -czvf dist/llm_tui-${VERSION}-linux-arm64.tar.gz -C dist llm_tui-linux-arm64
 
           # 3. macOS Apple Silicon (arm64)
-          GOOS=darwin GOARCH=arm64 go build -ldflags="-s -w" -o dist/llm_tui-darwin-arm64 .
+          GOOS=darwin GOARCH=arm64 go build -ldflags="${LDFLAGS}" -o dist/llm_tui-darwin-arm64 .
           tar -czvf dist/llm_tui-${VERSION}-darwin-arm64.tar.gz -C dist llm_tui-darwin-arm64
 
           # 4. macOS Intel (amd64)
-          GOOS=darwin GOARCH=amd64 go build -ldflags="-s -w" -o dist/llm_tui-darwin-amd64 .
+          GOOS=darwin GOARCH=amd64 go build -ldflags="${LDFLAGS}" -o dist/llm_tui-darwin-amd64 .
           tar -czvf dist/llm_tui-${VERSION}-darwin-amd64.tar.gz -C dist llm_tui-darwin-amd64
 
           # 5. Windows amd64
-          GOOS=windows GOARCH=amd64 go build -ldflags="-s -w" -o dist/llm_tui-windows-amd64.exe .
+          GOOS=windows GOARCH=amd64 go build -ldflags="${LDFLAGS}" -o dist/llm_tui-windows-amd64.exe .
           zip -j dist/llm_tui-${VERSION}-windows-amd64.zip dist/llm_tui-windows-amd64.exe
 
       - name: Publish GitHub Release

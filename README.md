@@ -1,5 +1,7 @@
 # ⚡ LLM TUI: Provider Manager & Chat Laboratory
 
+[English](README.md) | [简体中文](README-CN.md)
+
 `llm_tui` is a fast, modern, terminal-based user interface (TUI) application written in **Go** for auto-probing, managing, and interactively testing **LLM Provider API endpoints** (supporting **OpenAI Chat API**, **OpenAI Responses API**, and **Anthropic Messages API**).
 
 Built using the **Charm.sh** ecosystem (`bubbletea`, `lipgloss`, `viewport`, `textarea`) and a **pure-Go SQLite database** (`modernc.org/sqlite`, CGO-free), `llm_tui` allows developers and AI engineers to quickly verify provider connectivity, benchmark latency/tokens, and debug custom JSON request payloads side-by-side.
@@ -20,14 +22,14 @@ Built using the **Charm.sh** ecosystem (`bubbletea`, `lipgloss`, `viewport`, `te
   - **Left Pane (Request Payload Editor)**: Live multi-line JSON payload editor with active focus. Press `Ctrl+S` to send requests instantly without leaving the editor.
   - **Right Pane (Response Viewport)**: Displays HTTP status code, latency, token usage (Prompt, Completion, Total), and formatted JSON response with smooth `PgUp` / `PgDn` page scrolling.
 - **🤖 Embedded Model Switcher**:
-  - Press `m` in the Chat Laboratory to open an embedded model picker viewport in the left panel.
+  - Press `Alt+M` in the Chat Laboratory to open an embedded model picker viewport in the left panel.
   - Displays up to 20 models with centered scrolling pointers (`👉`). Selection updates model choice and saves to SQLite automatically.
 - **🧠 Flexible Reasoning Effort Shortcuts**:
-  - Press `[1]` to `[4]` to toggle Reasoning Effort (`none`, `low`, `high`, `max`).
+  - Press `Alt+1` to `Alt+4` to toggle Reasoning Effort (`none`, `low`, `high`, `max`).
   - Automatically formats `reasoning_effort` for OpenAI Chat, `reasoning` for OpenAI Responses, and `output_config.effort` for Anthropic Messages.
 - **📋 One-Click Clipboard Export**:
   - `Ctrl+Y`: Copy raw Request JSON payload to system clipboard.
-  - `c` / `y`: Copy formatted Response JSON payload to system clipboard.
+  - `Ctrl+U`: Copy formatted Response JSON payload to system clipboard.
 - **🛠️ Advanced Stream & Encoding Support**:
   - Automatically decodes GBK / GB2312 responses to UTF-8.
   - Assembles embedded SSE (`text/event-stream`) stream chunks into consolidated JSON completions.
@@ -71,7 +73,7 @@ go build -o llm_tui .
 | --- | --- |
 | `n` | Add New Provider (Launch Setup Wizard) |
 | `Enter` / `t` | Open Selected Provider in Chat Laboratory |
-| `d` | Delete Selected Provider Record |
+| `d` | Delete Selected Provider Record (press twice to confirm) |
 | `↑` / `k`, `↓` / `j` | Navigate Provider Cards |
 | `q` | Quit Application |
 
@@ -88,10 +90,10 @@ go build -o llm_tui .
 | --- | --- |
 | `Ctrl+S` | Send Request Payload & View Response |
 | `Tab` / `Shift+Tab` | Switch Focus between Left Pane (Request) & Right Pane (Response) |
-| `m` | Toggle Embedded Model Switcher Menu |
-| `[1]` - `[4]` | Switch Reasoning Effort (`1: none`, `2: low`, `3: high`, `4: max`) |
+| `Alt+M` | Toggle Embedded Model Switcher Menu |
+| `Alt+1` - `Alt+4` | Switch Reasoning Effort (`1: none`, `2: low`, `3: high`, `4: max`) |
 | `Ctrl+Y` | Copy Request JSON Payload to Clipboard |
-| `c` / `y` | Copy Response JSON Payload to Clipboard (when Right Pane is active) |
+| `Ctrl+U` | Copy Response JSON Payload to Clipboard |
 | `PgUp` / `PgDn` | Scroll Response Viewport Page by Page |
 | `Esc` | Return to Provider Manager |
 
@@ -110,3 +112,4 @@ go build -o llm_tui .
 ## 📄 License
 
 MIT License. Developed for pairing with AI coding agents and LLM endpoint benchmarking.
+

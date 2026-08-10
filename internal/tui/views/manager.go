@@ -15,6 +15,7 @@ import (
 // ManagerModel represents the provider list and CRUD manager view
 type ManagerModel struct {
 	DB            *db.DB
+	Version       string
 	Records       []db.ProviderRecord
 	Cursor        int
 	Width         int
@@ -24,9 +25,14 @@ type ManagerModel struct {
 	ConfirmDelete bool
 }
 
-func NewManagerModel(database *db.DB) ManagerModel {
+func NewManagerModel(database *db.DB, version ...string) ManagerModel {
+	ver := "v1.0.0"
+	if len(version) > 0 && version[0] != "" {
+		ver = version[0]
+	}
 	m := ManagerModel{
-		DB: database,
+		DB:      database,
+		Version: ver,
 	}
 	m.RefreshRecords()
 	return m
@@ -116,7 +122,11 @@ func (m ManagerModel) SelectedRecord() *db.ProviderRecord {
 func (m ManagerModel) View() string {
 	var sb strings.Builder
 
-	header := styles.HeaderStyle.Render("⚡ LLM Provider Manager & Tester (SQLite)")
+	verStr := m.Version
+	if verStr == "" {
+		verStr = "v1.0.0"
+	}
+	header := styles.HeaderStyle.Render(fmt.Sprintf("⚡ LLM Provider Manager & Tester %s (SQLite)", verStr))
 	sb.WriteString(header + "\n\n")
 
 	if m.StatusMsg != "" {

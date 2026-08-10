@@ -17,6 +17,7 @@ const (
 
 type AppModel struct {
 	DB           *db.DB
+	Version      string
 	Screen       Screen
 	ManagerView  views.ManagerModel
 	ProbeView    views.ProbeModel
@@ -25,10 +26,15 @@ type AppModel struct {
 	Height       int
 }
 
-func NewAppModel(database *db.DB) AppModel {
-	mgr := views.NewManagerModel(database)
+func NewAppModel(database *db.DB, version ...string) AppModel {
+	ver := "v1.0.0"
+	if len(version) > 0 && version[0] != "" {
+		ver = version[0]
+	}
+	mgr := views.NewManagerModel(database, ver)
 	return AppModel{
 		DB:          database,
+		Version:     ver,
 		Screen:      ScreenManager,
 		ManagerView: mgr,
 	}
