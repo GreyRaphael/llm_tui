@@ -341,4 +341,39 @@ func TestTesterModel_StreamModeDetection(t *testing.T) {
 	}
 }
 
+func TestTesterModel_ViewportWordWrap(t *testing.T) {
+	database, err := db.InitDB(":memory:")
+	if err != nil {
+		t.Fatalf("failed to init memory db: %v", err)
+	}
+	defer database.Close()
+
+	rec := db.ProviderRecord{
+		Name:    "Test Provider",
+		BaseURL: "https://api.openai.com",
+		APIKey:  "sk-test",
+		APIType: api.APITypeOpenAIChat,
+		Model:   "gpt-4o",
+	}
+
+	m := NewTesterModel(database, rec)
+	m.Resize(60, 30) // viewport width will be around 24
+
+	longLine := "This is a very long line of text that exceeds the viewport width and must be automatically wrapped into multiple lines by Lipgloss reflow engine."
+	m, _, _ = m.Update(api.StreamChunkMsg{
+		ContentDelta: longLine,
+	})
+
+	viewportView := m.Viewport.View()
+	if len(viewportView) == 0 {
+		t.Fatalf("expected non-empty viewport view")
+	}
+
+	// Verify that text is wrapped (contains newlines)
+	if m.Viewport.TotalLineCount() <= 1 {
+		t.Errorf("expected long line to be wrapped into multiple lines, total lines = %d", m.Viewport.TotalLineCount())
+	}
+}
+
+
 

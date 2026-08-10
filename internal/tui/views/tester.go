@@ -50,6 +50,7 @@ type TesterModel struct {
 	StreamCompletionTokens int
 	StreamTotalTokens      int
 	StreamError            string
+	LastRawViewportContent string
 }
 
 type executeFinishedMsg struct {
@@ -94,6 +95,20 @@ func NewTesterModel(database *db.DB, record db.ProviderRecord) TesterModel {
 	}
 }
 
+func (m *TesterModel) setViewportContent(content string) {
+	m.LastRawViewportContent = content
+	if content == "" {
+		m.Viewport.SetContent("")
+		return
+	}
+	if m.Viewport.Width > 0 {
+		wrapped := lipgloss.NewStyle().Width(m.Viewport.Width).Render(content)
+		m.Viewport.SetContent(wrapped)
+	} else {
+		m.Viewport.SetContent(content)
+	}
+}
+
 func (m *TesterModel) Resize(w, h int) {
 	m.Width = w
 	m.Height = h
@@ -114,6 +129,10 @@ func (m *TesterModel) Resize(w, h int) {
 
 	m.Viewport.Width = halfWidth - 4
 	m.Viewport.Height = paneHeight - 5
+
+	if m.LastRawViewportContent != "" {
+		m.setViewportContent(m.LastRawViewportContent)
+	}
 }
 
 func (m TesterModel) Init() tea.Cmd {
@@ -138,7 +157,7 @@ func (m TesterModel) Update(msg tea.Msg) (TesterModel, tea.Cmd, string) {
 	case executeFinishedMsg:
 		m.IsExecuting = false
 		m.LastResult = msg.result
-		m.Viewport.SetContent(msg.result.FormattedBody)
+		m.setViewportContent(msg.result.FormattedBody)
 		m.Viewport.GotoTop()
 		m.CopyStatusMsg = ""
 		return m, nil, ""
@@ -193,7 +212,7 @@ func (m TesterModel) Update(msg tea.Msg) (TesterModel, tea.Cmd, string) {
 			formattedContent = styles.ErrorStyle.Render("Error: " + m.StreamError)
 		}
 
-		m.Viewport.SetContent(formattedContent)
+		m.setViewportContent(formattedContent)
 		if m.IsExecuting {
 			m.Viewport.GotoBottom()
 		}
@@ -245,7 +264,7 @@ func (m TesterModel) Update(msg tea.Msg) (TesterModel, tea.Cmd, string) {
 			}
 			m.CopyStatusMsg = ""
 
-			m.Viewport.SetContent(formattedContent)
+			m.setViewportContent(formattedContent)
 			return m, nil, ""
 		}
 
@@ -355,7 +374,7 @@ func (m TesterModel) Update(msg tea.Msg) (TesterModel, tea.Cmd, string) {
 			m.StreamTotalTokens = 0
 			m.StreamError = ""
 			m.LastResult = nil
-			m.Viewport.SetContent("")
+			m.setViewportContent("")
 
 			m.Record.CustomPayload = m.Textarea.Value()
 			m.Record.ReasoningEffort = m.ReasoningEffort
