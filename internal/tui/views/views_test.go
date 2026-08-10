@@ -375,5 +375,36 @@ func TestTesterModel_ViewportWordWrap(t *testing.T) {
 	}
 }
 
+func TestTesterModel_MarkdownRendering(t *testing.T) {
+	database, err := db.InitDB(":memory:")
+	if err != nil {
+		t.Fatalf("failed to init memory db: %v", err)
+	}
+	defer database.Close()
+
+	rec := db.ProviderRecord{
+		Name:    "Test Provider",
+		BaseURL: "https://api.openai.com",
+		APIKey:  "sk-test",
+		APIType: api.APITypeOpenAIChat,
+		Model:   "gpt-4o",
+	}
+
+	m := NewTesterModel(database, rec)
+	m.Resize(80, 30)
+
+	markdownText := "# Header\n\n- Item 1\n- Item 2\n\n```python\nprint('hello')\n```"
+	m, _, _ = m.Update(api.StreamChunkMsg{
+		ContentDelta: markdownText,
+		Done:         true,
+	})
+
+	viewportView := m.Viewport.View()
+	if len(viewportView) == 0 {
+		t.Fatalf("expected non-empty viewport view after markdown rendering")
+	}
+}
+
+
 
 

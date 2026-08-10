@@ -10,10 +10,12 @@ import (
 	"llm_tui/internal/clipboard"
 	"llm_tui/internal/db"
 	"llm_tui/internal/tui/styles"
+
 	"github.com/charmbracelet/bubbles/spinner"
 	"github.com/charmbracelet/bubbles/textarea"
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/glamour"
 	"github.com/charmbracelet/lipgloss"
 )
 
@@ -59,6 +61,27 @@ type executeFinishedMsg struct {
 
 type testerModelsFetchedMsg struct {
 	models []string
+}
+
+func renderMarkdown(text string, width int) string {
+	if text == "" {
+		return ""
+	}
+	if width <= 0 {
+		width = 80
+	}
+	r, err := glamour.NewTermRenderer(
+		glamour.WithStandardStyle("dark"),
+		glamour.WithWordWrap(width),
+	)
+	if err != nil {
+		return text
+	}
+	rendered, err := r.Render(text)
+	if err != nil {
+		return text
+	}
+	return strings.TrimSpace(rendered)
 }
 
 func NewTesterModel(database *db.DB, record db.ProviderRecord) TesterModel {
@@ -197,16 +220,46 @@ func (m TesterModel) Update(msg tea.Msg) (TesterModel, tea.Cmd, string) {
 			var rBuilder strings.Builder
 			rBuilder.WriteString(styles.BadgeAccentStyle.Render("💭 Thinking Process") + "\n")
 			rBuilder.WriteString(styles.HelpStyle.Render("-------------------") + "\n")
-			rBuilder.WriteString(reasoningText + "\n\n")
+
+			if msg.Done {
+				renderedReasoning := renderMarkdown(reasoningText, m.Viewport.Width)
+				if renderedReasoning != "" {
+					rBuilder.WriteString(renderedReasoning + "\n\n")
+				} else {
+					rBuilder.WriteString(reasoningText + "\n\n")
+				}
+			} else {
+				rBuilder.WriteString(reasoningText + "\n\n")
+			}
+
 			rBuilder.WriteString(styles.BadgeSuccessStyle.Render("💬 Response Content") + "\n")
 			rBuilder.WriteString(styles.HelpStyle.Render("-------------------") + "\n")
-			rBuilder.WriteString(contentText)
+
+			if msg.Done {
+				renderedContent := renderMarkdown(contentText, m.Viewport.Width)
+				if renderedContent != "" {
+					rBuilder.WriteString(renderedContent)
+				} else {
+					rBuilder.WriteString(contentText)
+				}
+			} else {
+				rBuilder.WriteString(contentText)
+			}
 			formattedContent = rBuilder.String()
 		} else if contentText != "" {
 			if json.Valid([]byte(contentText)) {
 				formattedContent = api.FormatJSON(contentText)
 			} else {
-				formattedContent = contentText
+				if msg.Done {
+					renderedContent := renderMarkdown(contentText, m.Viewport.Width)
+					if renderedContent != "" {
+						formattedContent = renderedContent
+					} else {
+						formattedContent = contentText
+					}
+				} else {
+					formattedContent = contentText
+				}
 			}
 		} else if m.StreamError != "" {
 			formattedContent = styles.ErrorStyle.Render("Error: " + m.StreamError)
