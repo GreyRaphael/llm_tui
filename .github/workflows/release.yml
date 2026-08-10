@@ -7,7 +7,7 @@ on:
 
 jobs:
   release:
-    name: Build Multi-Platform Binaries & Create Release
+    name: Build Multi-Platform Binaries & Publish Release
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -23,26 +23,42 @@ jobs:
           check-latest: true
           cache: true
 
-      - name: Build Cross-Platform Binaries
+      - name: Build Cross-Platform Binaries & Archives
         run: |
-          mkdir -p dist
-          # Linux x86_64
-          GOOS=linux GOARCH=amd64 go build -ldflags="-s -w" -o dist/llm_tui-linux-amd64 .
-          # macOS Apple Silicon (arm64)
-          GOOS=darwin GOARCH=arm64 go build -ldflags="-s -w" -o dist/llm_tui-darwin-arm64 .
-          # macOS Intel (amd64)
-          GOOS=darwin GOARCH=amd64 go build -ldflags="-s -w" -o dist/llm_tui-darwin-amd64 .
-          # Windows x86_64
-          GOOS=windows GOARCH=amd64 go build -ldflags="-s -w" -o dist/llm_tui-windows-amd64.exe .
+          mkdir -p dist/bin
+          VERSION="${GITHUB_REF_NAME}"
 
-      - name: Create GitHub Release
+          # 1. Linux amd64
+          GOOS=linux GOARCH=amd64 go build -ldflags="-s -w" -o dist/llm_tui-linux-amd64 .
+          tar -czvf dist/llm_tui-${VERSION}-linux-amd64.tar.gz -C dist llm_tui-linux-amd64
+
+          # 2. Linux arm64
+          GOOS=linux GOARCH=arm64 go build -ldflags="-s -w" -o dist/llm_tui-linux-arm64 .
+          tar -czvf dist/llm_tui-${VERSION}-linux-arm64.tar.gz -C dist llm_tui-linux-arm64
+
+          # 3. macOS Apple Silicon (arm64)
+          GOOS=darwin GOARCH=arm64 go build -ldflags="-s -w" -o dist/llm_tui-darwin-arm64 .
+          tar -czvf dist/llm_tui-${VERSION}-darwin-arm64.tar.gz -C dist llm_tui-darwin-arm64
+
+          # 4. macOS Intel (amd64)
+          GOOS=darwin GOARCH=amd64 go build -ldflags="-s -w" -o dist/llm_tui-darwin-amd64 .
+          tar -czvf dist/llm_tui-${VERSION}-darwin-amd64.tar.gz -C dist llm_tui-darwin-amd64
+
+          # 5. Windows amd64
+          GOOS=windows GOARCH=amd64 go build -ldflags="-s -w" -o dist/llm_tui-windows-amd64.exe .
+          zip -j dist/llm_tui-${VERSION}-windows-amd64.zip dist/llm_tui-windows-amd64.exe
+
+      - name: Publish GitHub Release
         uses: softprops/action-gh-release@v2
         with:
           files: |
             dist/llm_tui-linux-amd64
+            dist/llm_tui-linux-arm64
             dist/llm_tui-darwin-arm64
             dist/llm_tui-darwin-amd64
             dist/llm_tui-windows-amd64.exe
+            dist/*.tar.gz
+            dist/*.zip
           generate_release_notes: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
