@@ -7,10 +7,9 @@ import (
 	"time"
 
 	"llm_tui/internal/api"
+	"llm_tui/internal/clipboard"
 	"llm_tui/internal/db"
 	"llm_tui/internal/tui/styles"
-
-	"github.com/atotto/clipboard"
 	"github.com/charmbracelet/bubbles/spinner"
 	"github.com/charmbracelet/bubbles/textarea"
 	"github.com/charmbracelet/bubbles/viewport"
