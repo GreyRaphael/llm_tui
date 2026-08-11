@@ -29,34 +29,29 @@ jobs:
           LDFLAGS="-X main.Version=${VERSION} -s -w"
 
           # 1. Linux amd64
-          GOOS=linux GOARCH=amd64 go build -ldflags="${LDFLAGS}" -o dist/llm_tui-linux-amd64 .
-          tar -czvf dist/llm_tui-${VERSION}-linux-amd64.tar.gz -C dist llm_tui-linux-amd64
+          GOOS=linux GOARCH=amd64 go build -ldflags="${LDFLAGS}" -o dist/linux-amd64/llm_tui .
+          tar -czvf dist/llm_tui-${VERSION}-linux-amd64.tar.gz -C dist/linux-amd64 llm_tui
 
           # 2. Linux arm64
-          GOOS=linux GOARCH=arm64 go build -ldflags="${LDFLAGS}" -o dist/llm_tui-linux-arm64 .
-          tar -czvf dist/llm_tui-${VERSION}-linux-arm64.tar.gz -C dist llm_tui-linux-arm64
+          GOOS=linux GOARCH=arm64 go build -ldflags="${LDFLAGS}" -o dist/linux-arm64/llm_tui .
+          tar -czvf dist/llm_tui-${VERSION}-linux-arm64.tar.gz -C dist/linux-arm64 llm_tui
 
           # 3. macOS Apple Silicon (arm64)
-          GOOS=darwin GOARCH=arm64 go build -ldflags="${LDFLAGS}" -o dist/llm_tui-darwin-arm64 .
-          tar -czvf dist/llm_tui-${VERSION}-darwin-arm64.tar.gz -C dist llm_tui-darwin-arm64
+          GOOS=darwin GOARCH=arm64 go build -ldflags="${LDFLAGS}" -o dist/darwin-arm64/llm_tui .
+          tar -czvf dist/llm_tui-${VERSION}-darwin-arm64.tar.gz -C dist/darwin-arm64 llm_tui
 
           # 4. macOS Intel (amd64)
-          GOOS=darwin GOARCH=amd64 go build -ldflags="${LDFLAGS}" -o dist/llm_tui-darwin-amd64 .
-          tar -czvf dist/llm_tui-${VERSION}-darwin-amd64.tar.gz -C dist llm_tui-darwin-amd64
+          GOOS=darwin GOARCH=amd64 go build -ldflags="${LDFLAGS}" -o dist/darwin-amd64/llm_tui .
+          tar -czvf dist/llm_tui-${VERSION}-darwin-amd64.tar.gz -C dist/darwin-amd64 llm_tui
 
           # 5. Windows amd64
-          GOOS=windows GOARCH=amd64 go build -ldflags="${LDFLAGS}" -o dist/llm_tui-windows-amd64.exe .
-          zip -j dist/llm_tui-${VERSION}-windows-amd64.zip dist/llm_tui-windows-amd64.exe
+          GOOS=windows GOARCH=amd64 go build -ldflags="${LDFLAGS}" -o dist/windows-amd64/llm_tui.exe .
+          zip -j dist/llm_tui-${VERSION}-windows-amd64.zip dist/windows-amd64/llm_tui.exe
 
       - name: Publish GitHub Release
         uses: softprops/action-gh-release@v2
         with:
           files: |
-            dist/llm_tui-linux-amd64
-            dist/llm_tui-linux-arm64
-            dist/llm_tui-darwin-arm64
-            dist/llm_tui-darwin-amd64
-            dist/llm_tui-windows-amd64.exe
             dist/*.tar.gz
             dist/*.zip
           generate_release_notes: true
