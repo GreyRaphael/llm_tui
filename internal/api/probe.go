@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -273,6 +274,7 @@ func FetchModels(baseURL, apiKey string) ([]string, error) {
 				}
 			}
 			if len(models) > 0 {
+				sort.Strings(models)
 				return models, nil
 			}
 		}

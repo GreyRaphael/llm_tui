@@ -344,7 +344,26 @@ func (m TesterModel) Update(msg tea.Msg) (TesterModel, tea.Cmd, string) {
 					newModel := m.DiscoveredModels[m.ModelIndex]
 					m.Record.Model = newModel
 					m.Record.Name = fmt.Sprintf("%s (%s)", newModel, m.Record.APIType)
-					m.Textarea.SetValue(api.GeneratePayloadTemplate(m.Record.APIType, m.Record.Model, m.ReasoningEffort))
+					// Preserve current stream setting when regenerating template
+					currentStream := true
+					var oldPayload map[string]interface{}
+					if err := json.Unmarshal([]byte(m.Textarea.Value()), &oldPayload); err == nil {
+						if s, ok := oldPayload["stream"].(bool); ok {
+							currentStream = s
+						}
+					}
+					newTemplate := api.GeneratePayloadTemplate(m.Record.APIType, m.Record.Model, m.ReasoningEffort)
+					var newPayload map[string]interface{}
+					if err := json.Unmarshal([]byte(newTemplate), &newPayload); err == nil {
+						newPayload["stream"] = currentStream
+						if buf, err := json.MarshalIndent(newPayload, "", "  "); err == nil {
+							m.Textarea.SetValue(string(buf))
+						} else {
+							m.Textarea.SetValue(newTemplate)
+						}
+					} else {
+						m.Textarea.SetValue(newTemplate)
+					}
 					m.Record.CustomPayload = m.Textarea.Value()
 					_ = m.DB.UpdateRecord(&m.Record)
 					m.CopyStatusMsg = fmt.Sprintf("Switched model to '%s'", newModel)
@@ -455,6 +474,29 @@ func (m TesterModel) Update(msg tea.Msg) (TesterModel, tea.Cmd, string) {
 				return m, tea.Batch(m.Spinner.Tick, m.runExecuteNonStreamCmd()), ""
 			}
 
+		case "alt+s":
+			// Toggle stream parameter in payload JSON
+			var payloadMap map[string]interface{}
+			if err := json.Unmarshal([]byte(m.Textarea.Value()), &payloadMap); err == nil {
+				currentStream := false
+				if s, ok := payloadMap["stream"].(bool); ok {
+					currentStream = s
+				}
+				payloadMap["stream"] = !currentStream
+				buf, err := json.MarshalIndent(payloadMap, "", "  ")
+				if err == nil {
+					m.Textarea.SetValue(string(buf))
+				}
+				if !currentStream {
+					m.CopyStatusMsg = "🔄 Stream mode: ON"
+				} else {
+					m.CopyStatusMsg = "🔄 Stream mode: OFF"
+				}
+			} else {
+				m.CopyStatusMsg = "❌ Cannot toggle stream: invalid JSON payload"
+			}
+			return m, nil, ""
+
 		case "alt+1", "alt+2", "alt+3", "alt+4":
 			switch msg.String() {
 			case "alt+1":
@@ -466,7 +508,26 @@ func (m TesterModel) Update(msg tea.Msg) (TesterModel, tea.Cmd, string) {
 			case "alt+4":
 				m.ReasoningEffort = db.ReasoningEffortMax
 			}
-			m.Textarea.SetValue(api.GeneratePayloadTemplate(m.Record.APIType, m.Record.Model, m.ReasoningEffort))
+			// Preserve current stream setting when regenerating template
+			currentStream := true
+			var oldPayload map[string]interface{}
+			if err := json.Unmarshal([]byte(m.Textarea.Value()), &oldPayload); err == nil {
+				if s, ok := oldPayload["stream"].(bool); ok {
+					currentStream = s
+				}
+			}
+			newTemplate := api.GeneratePayloadTemplate(m.Record.APIType, m.Record.Model, m.ReasoningEffort)
+			var newPayload map[string]interface{}
+			if err := json.Unmarshal([]byte(newTemplate), &newPayload); err == nil {
+				newPayload["stream"] = currentStream
+				if buf, err := json.MarshalIndent(newPayload, "", "  "); err == nil {
+					m.Textarea.SetValue(string(buf))
+				} else {
+					m.Textarea.SetValue(newTemplate)
+				}
+			} else {
+				m.Textarea.SetValue(newTemplate)
+			}
 			return m, nil, ""
 		}
 	}
@@ -530,7 +591,7 @@ func waitForStreamChunkCmd(ch chan api.StreamChunkMsg) tea.Cmd {
 func (m TesterModel) View() string {
 	var sb strings.Builder
 
-	header := styles.HeaderStyle.Render(fmt.Sprintf("🧪 LLM Chat Laboratory: %s", m.Record.Name))
+	header := styles.HeaderStyle.Render(fmt.Sprintf("🧪 LLM Chat Laboratory: %s (%s)", m.Record.Model, m.Record.APIType))
 	sb.WriteString(header + "\n\n")
 
 	// Info Card with Model Switcher Badge
@@ -688,7 +749,14 @@ func (m TesterModel) View() string {
 			)
 			rightContentBuilder.WriteString(metrics + "\n\n")
 			if m.StreamError != "" {
-				rightContentBuilder.WriteString(styles.ErrorStyle.Render("Error: "+m.StreamError) + "\n")
+				streamErrSummary := m.StreamError
+				if idx := strings.IndexAny(streamErrSummary, "\n\r"); idx > 0 {
+					streamErrSummary = streamErrSummary[:idx]
+				}
+				if len(streamErrSummary) > 80 {
+					streamErrSummary = streamErrSummary[:80] + "..."
+				}
+				rightContentBuilder.WriteString(styles.ErrorStyle.Render("Error: "+streamErrSummary) + "\n")
 			}
 			rightContentBuilder.WriteString(m.Viewport.View())
 		} else {
@@ -716,7 +784,15 @@ func (m TesterModel) View() string {
 		)
 		rightContentBuilder.WriteString(metrics + "\n\n")
 		if m.LastResult.Error != "" {
-			rightContentBuilder.WriteString(styles.ErrorStyle.Render("Error: "+m.LastResult.Error) + "\n")
+			errSummary := m.LastResult.Error
+			// Truncate to first line for display above viewport
+			if idx := strings.IndexAny(errSummary, "\n\r"); idx > 0 {
+				errSummary = errSummary[:idx]
+			}
+			if len(errSummary) > 80 {
+				errSummary = errSummary[:80] + "..."
+			}
+			rightContentBuilder.WriteString(styles.ErrorStyle.Render("Error: "+errSummary) + "\n")
 		}
 		rightContentBuilder.WriteString(m.Viewport.View())
 	} else {
@@ -731,7 +807,7 @@ func (m TesterModel) View() string {
 
 	// Help Footer
 	helpKey := styles.HelpStyle.Render(
-		"[Ctrl+S] Send  [Ctrl+Y] Copy Req  [Ctrl+U] Copy Resp  [PgUp/PgDn] Scroll  [Alt+M] Model  [Tab] Pane  [Alt+1~4] Reasoning  [Esc] Manager",
+		"[Ctrl+S] Send  [Ctrl+Y] Copy Req  [Ctrl+U] Copy Resp  [PgUp/PgDn] Scroll  [Alt+M] Model  [Alt+S] Stream  [Tab] Pane  [Alt+1~4] Reasoning  [Esc] Manager",
 	)
 	sb.WriteString(helpKey)
 

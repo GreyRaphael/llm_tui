@@ -364,12 +364,26 @@ func ExecuteTestRequest(baseURL, apiKey, apiType, payloadJSON string) *TestResul
 	bodyStr := decodeGBKIfNeeded(bodyBytes)
 	res.RawBody = bodyStr
 
-	// If response contains embedded SSE stream logs (e.g. LiteLLM/vLLM error wrapping SSE data), parse and assemble
-	if isSSEResponse([]byte(bodyStr)) {
-		res.RawBody = assembleSSEResponse([]byte(bodyStr), res)
+	// Check if response is a JSON error (e.g., LiteLLM wrapping SSE data in error message)
+	isErrorJSON := false
+	var genericCheck map[string]interface{}
+	if err := json.Unmarshal([]byte(bodyStr), &genericCheck); err == nil {
+		if _, hasErr := genericCheck["error"]; hasErr {
+			isErrorJSON = true
+		}
 	}
 
-	res.FormattedBody = FormatJSON(res.RawBody)
+	if isErrorJSON {
+		// Unescape nested content for human-readable display instead of trying to parse SSE
+		readable := unescapeForDisplay(bodyStr)
+		res.FormattedBody = readable
+	} else if isSSEResponse([]byte(bodyStr)) {
+		// If response contains embedded SSE stream logs (e.g. LiteLLM/vLLM error wrapping SSE data), parse and assemble
+		res.RawBody = assembleSSEResponse([]byte(bodyStr), res)
+		res.FormattedBody = FormatJSON(res.RawBody)
+	} else {
+		res.FormattedBody = FormatJSON(res.RawBody)
+	}
 
 	// Extract token usage metrics & error if present in JSON
 	extractTokenUsage([]byte(res.RawBody), res)
@@ -389,6 +403,32 @@ func decodeGBKIfNeeded(data []byte) string {
 		return string(utf8Bytes)
 	}
 	return string(data)
+}
+
+// unescapeForDisplay cleans up nested JSON escape sequences for human-readable display
+func unescapeForDisplay(s string) string {
+	// First, try to pretty-print the JSON structure
+	var genericMap map[string]interface{}
+	if err := json.Unmarshal([]byte(s), &genericMap); err == nil {
+		// Extract the error message string and unescape it
+		if errObj, ok := genericMap["error"].(map[string]interface{}); ok {
+			if msg, ok := errObj["message"].(string); ok {
+				// The message string is already unescaped by json.Unmarshal,
+				// but may contain further escaped sequences from nested JSON
+				msg = strings.ReplaceAll(msg, `\"`, `"`)
+				msg = strings.ReplaceAll(msg, `\\n`, "\n")
+				msg = strings.ReplaceAll(msg, `\n`, "\n")
+				msg = strings.ReplaceAll(msg, `\\`, `\`)
+				return msg
+			}
+		}
+	}
+	// Fallback: basic unescape
+	result := s
+	result = strings.ReplaceAll(result, `\\\"`, `"`)
+	result = strings.ReplaceAll(result, `\\n`, "\n")
+	result = strings.ReplaceAll(result, `\\\\`, `\`)
+	return result
 }
 
 func isSSEResponse(body []byte) bool {
