@@ -12,7 +12,7 @@ import (
 )
 
 // Version can be set at build time via -ldflags="-X main.Version=v1.2.0"
-var Version = "v1.2.0"
+var Version = "v1.3.0"
 
 func main() {
 	if len(os.Args) > 1 {
