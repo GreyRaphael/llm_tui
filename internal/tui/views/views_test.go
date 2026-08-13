@@ -2,6 +2,7 @@ package views
 
 import (
 	"testing"
+	"time"
 
 	"llm_tui/internal/api"
 	"llm_tui/internal/db"
@@ -226,6 +227,44 @@ func TestTesterModel_ReasoningEffortShortcuts(t *testing.T) {
 	// Verify Resize sets dimensions
 	if m.Width != 120 || m.Height != 40 {
 		t.Errorf("expected dimensions 120x40, got %dx%d", m.Width, m.Height)
+	}
+}
+
+func TestFormatTPS(t *testing.T) {
+	tests := []struct {
+		name        string
+		totalTokens int
+		latency     time.Duration
+		want        string
+	}{
+		{"normal", 211, 2623553075 * time.Nanosecond, "80.43"},
+		{"zero tokens", 0, 2 * time.Second, "-"},
+		{"zero latency", 100, 0, "-"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := formatTPS(tt.totalTokens, tt.latency); got != tt.want {
+				t.Errorf("formatTPS(%d, %v) = %q; want %q", tt.totalTokens, tt.latency, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestFormatLatency(t *testing.T) {
+	tests := []struct {
+		name    string
+		latency time.Duration
+		want    string
+	}{
+		{"normal", 2623553075 * time.Nanosecond, "2.62s"},
+		{"zero", 0, "0.00s"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := formatLatency(tt.latency); got != tt.want {
+				t.Errorf("formatLatency(%v) = %q; want %q", tt.latency, got, tt.want)
+			}
+		})
 	}
 }
 

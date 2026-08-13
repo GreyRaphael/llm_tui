@@ -84,6 +84,21 @@ func renderMarkdown(text string, width int) string {
 	return strings.TrimSpace(rendered)
 }
 
+// formatTPS returns tokens-per-second as a short string, or "-" when neither
+// latency nor token count is available yet.
+func formatTPS(totalTokens int, latency time.Duration) string {
+	secs := latency.Seconds()
+	if secs <= 0 || totalTokens <= 0 {
+		return "-"
+	}
+	return fmt.Sprintf("%.2f", float64(totalTokens)/secs)
+}
+
+// formatLatency renders a duration in seconds with two decimal places.
+func formatLatency(latency time.Duration) string {
+	return fmt.Sprintf("%.2fs", latency.Seconds())
+}
+
 func NewTesterModel(database *db.DB, record db.ProviderRecord) TesterModel {
 	ta := textarea.New()
 	ta.Placeholder = "Enter request JSON payload here..."
@@ -739,13 +754,10 @@ func (m TesterModel) View() string {
 				statusText = fmt.Sprintf("HTTP %d", m.StreamStatusCode)
 			}
 			metrics := fmt.Sprintf(
-				"%s %s | Latency: %s\nTokens: P=%d, C=%d, T=%d",
+				"%s %s | Latency: %s",
 				m.Spinner.View(),
 				styles.BadgeSuccessStyle.Render(statusText),
-				styles.MetricValueStyle.Render(fmt.Sprintf("%v", m.StreamLatency)),
-				m.StreamPromptTokens,
-				m.StreamCompletionTokens,
-				m.StreamTotalTokens,
+				styles.MetricValueStyle.Render(formatLatency(m.StreamLatency)),
 			)
 			rightContentBuilder.WriteString(metrics + "\n\n")
 			if m.StreamError != "" {
@@ -775,12 +787,10 @@ func (m TesterModel) View() string {
 		}
 
 		metrics := fmt.Sprintf(
-			"%s | Latency: %s\nTokens: P=%d, C=%d, T=%d",
+			"%s | Latency: %s | tps: %s",
 			statusStyle.Render(statusText),
-			styles.MetricValueStyle.Render(fmt.Sprintf("%v", m.LastResult.Latency)),
-			m.LastResult.PromptTokens,
-			m.LastResult.CompletionTokens,
-			m.LastResult.TotalTokens,
+			styles.MetricValueStyle.Render(formatLatency(m.LastResult.Latency)),
+			formatTPS(m.LastResult.TotalTokens, m.LastResult.Latency),
 		)
 		rightContentBuilder.WriteString(metrics + "\n\n")
 		if m.LastResult.Error != "" {
