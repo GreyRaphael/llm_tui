@@ -12,7 +12,8 @@ Built using the **Charm.sh** ecosystem (`bubbletea`, `lipgloss`, `viewport`, `te
 
 - **🔍 Automated Capability Probing & Setup Wizard**:
   - Connects to any OpenAI or Anthropic compatible Base URL.
-  - Automatically queries `/models` endpoint to discover available models.
+  - API keys are optional: leave empty for unauthenticated providers / local servers.
+  - Automatically queries the `/models` endpoint (with root-URL fallback) to discover available models; if discovery fails, prompts you to enter the exact model ID manually.
   - Probes endpoints concurrently with realistic timeouts (30s) to detect active capabilities (`openai_chat`, `openai_responses`, `anthropic_messages`).
 - **💾 Pure Go SQLite Storage (CGO-Free)**:
   - Local database (`providers.db`) located alongside the binary.
@@ -20,7 +21,7 @@ Built using the **Charm.sh** ecosystem (`bubbletea`, `lipgloss`, `viewport`, `te
   - Auto-fills saved API Keys when matching Base URLs.
 - **🧪 Side-by-Side Split-Pane Chat Laboratory**:
   - **Left Pane (Request Payload Editor)**: Live multi-line JSON payload editor with active focus. Press `Ctrl+S` to send requests instantly without leaving the editor.
-  - **Right Pane (Response Viewport)**: Displays HTTP status code, latency, token usage (Prompt, Completion, Total), and formatted JSON response with smooth `PgUp` / `PgDn` page scrolling.
+  - **Right Pane (Response Viewport)**: Displays HTTP status code, latency, token usage (Prompt, Completion, Total), tokens-per-second (TPS) throughput, and formatted JSON response with smooth `PgUp` / `PgDn` page scrolling.
 - **🤖 Embedded Model Switcher**:
   - Press `Alt+M` in the Chat Laboratory to open an embedded model picker viewport in the left panel.
   - Displays up to 20 models with centered scrolling pointers (`👉`). Selection updates model choice and saves to SQLite automatically.
@@ -29,7 +30,7 @@ Built using the **Charm.sh** ecosystem (`bubbletea`, `lipgloss`, `viewport`, `te
   - Automatically formats `reasoning_effort` for OpenAI Chat, `reasoning` for OpenAI Responses, and `output_config.effort` for Anthropic Messages.
 - **⚡ Real-Time SSE Streaming & Reasoning Process Visualization**:
   - Native support for typewriter-style real-time streaming via HTTP SSE (`text/event-stream`).
-  - Auto-detects `"stream": true/false` payload mode: Pretty JSON for non-stream, live typewriter display for stream mode with dedicated **💭 Thinking Process** and **💬 Response Content** cards.
+  - Auto-detects `"stream": true/false` payload mode (toggle it manually anytime with `Alt+S`): Pretty JSON for non-stream, live typewriter display for stream mode with dedicated **💭 Thinking Process** and **💬 Response Content** cards.
 - **🎨 Terminal Glamour Markdown Rendering & Code Syntax Highlighting**:
   - Integrated Charm `glamour` Markdown renderer engine.
   - Automatically highlights code blocks (Python, Go, SQL, JSON, etc.), header tags, bold text, and lists.
@@ -45,22 +46,28 @@ Built using the **Charm.sh** ecosystem (`bubbletea`, `lipgloss`, `viewport`, `te
 
 ### Option 1: Download Pre-built Release Binaries
 
-Download the executable for your OS/Architecture from the [GitHub Releases](../../releases):
+Download the archive for your OS/Architecture from the [GitHub Releases](../../releases) (each archive contains the `llm_tui` binary, or `llm_tui.exe` on Windows):
 
-- **Linux (x86_64)**: `llm_tui-linux-amd64`
-- **macOS (Apple Silicon)**: `llm_tui-darwin-arm64`
-- **macOS (Intel)**: `llm_tui-darwin-amd64`
-- **Windows (x86_64)**: `llm_tui-windows-amd64.exe`
+- **Linux (x86_64)**: `llm_tui-<version>-linux-amd64.tar.gz`
+- **Linux (ARM64)**: `llm_tui-<version>-linux-arm64.tar.gz`
+- **macOS (Apple Silicon)**: `llm_tui-<version>-darwin-arm64.tar.gz`
+- **macOS (Intel)**: `llm_tui-<version>-darwin-amd64.tar.gz`
+- **Windows (x86_64)**: `llm_tui-<version>-windows-amd64.zip`
 
-Make it executable and run:
+Extract and run:
 ```bash
-chmod +x llm_tui-linux-amd64
-./llm_tui-linux-amd64
+# Linux / macOS
+tar -xzf llm_tui-<version>-linux-amd64.tar.gz   # or -darwin-arm64 / -darwin-amd64
+./llm_tui
+
+# Windows (PowerShell)
+Expand-Archive llm_tui-<version>-windows-amd64.zip
+.\llm_tui.exe
 ```
 
 ### Option 2: Build from Source
 
-Requires Go 1.22+:
+Requires Go 1.25+:
 
 ```bash
 git clone https://github.com/GreyRaphael/llm_tui.git
@@ -94,6 +101,7 @@ go build -o llm_tui .
 | Key | Action |
 | --- | --- |
 | `Ctrl+S` | Send Request Payload & View Response |
+| `Alt+S` | Toggle Streaming Mode (`stream: true/false`) in Payload JSON |
 | `Tab` / `Shift+Tab` | Switch Focus between Left Pane (Request) & Right Pane (Response) |
 | `Alt+M` | Toggle Embedded Model Switcher Menu |
 | `Alt+1` - `Alt+4` | Switch Reasoning Effort (`1: none`, `2: low`, `3: high`, `4: max`) |
