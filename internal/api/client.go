@@ -154,22 +154,12 @@ func ExecuteStreamRequest(baseURL, apiKey, apiType, payloadJSON string, msgChan 
 			continue
 		}
 
-		// Extract Usage
+		// Extract Usage; OpenAI Responses API nests it under response.usage.
 		if usageMap, ok := chunk["usage"].(map[string]interface{}); ok {
-			if pt, ok := usageMap["prompt_tokens"].(float64); ok {
-				promptTokens = int(pt)
-			}
-			if ct, ok := usageMap["completion_tokens"].(float64); ok {
-				completionTokens = int(ct)
-			}
-			if tt, ok := usageMap["total_tokens"].(float64); ok {
-				totalTokens = int(tt)
-			}
-			if pt, ok := usageMap["input_tokens"].(float64); ok {
-				promptTokens = int(pt)
-			}
-			if ct, ok := usageMap["output_tokens"].(float64); ok {
-				completionTokens = int(ct)
+			extractTokenUsageFromMap(usageMap, &promptTokens, &completionTokens, &totalTokens)
+		} else if responseMap, ok := chunk["response"].(map[string]interface{}); ok {
+			if usageMap, ok := responseMap["usage"].(map[string]interface{}); ok {
+				extractTokenUsageFromMap(usageMap, &promptTokens, &completionTokens, &totalTokens)
 			}
 		}
 
@@ -228,11 +218,11 @@ func ExecuteStreamRequest(baseURL, apiKey, apiType, payloadJSON string, msgChan 
 		// 3. OpenAI Responses API Stream format
 		if typeVal, ok := chunk["type"].(string); ok {
 			switch typeVal {
-			case "response.text.delta":
+			case "response.text.delta", "response.output_text.delta":
 				if delta, ok := chunk["delta"].(string); ok {
 					contentDelta += delta
 				}
-			case "response.reasoning.delta":
+			case "response.reasoning.delta", "response.reasoning_text.delta", "response.reasoning_summary_text.delta":
 				if delta, ok := chunk["delta"].(string); ok {
 					reasoningDelta += delta
 				}
@@ -541,6 +531,22 @@ func assembleSSEResponse(body []byte, res *TestResult) string {
 		return string(body)
 	}
 	return string(assembledJSON)
+}
+
+func extractTokenUsageFromMap(usageMap map[string]interface{}, promptTokens, completionTokens, totalTokens *int) {
+	if pt, ok := usageMap["prompt_tokens"].(float64); ok {
+		*promptTokens = int(pt)
+	} else if pt, ok := usageMap["input_tokens"].(float64); ok {
+		*promptTokens = int(pt)
+	}
+	if ct, ok := usageMap["completion_tokens"].(float64); ok {
+		*completionTokens = int(ct)
+	} else if ct, ok := usageMap["output_tokens"].(float64); ok {
+		*completionTokens = int(ct)
+	}
+	if tt, ok := usageMap["total_tokens"].(float64); ok {
+		*totalTokens = int(tt)
+	}
 }
 
 func extractTokenUsage(body []byte, res *TestResult) {

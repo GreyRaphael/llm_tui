@@ -331,3 +331,66 @@ data: [DONE]`
 		t.Errorf("unexpected token usage stats: P=%d, C=%d, T=%d", finalPromptTokens, finalCompletionTokens, finalTotalTokens)
 	}
 }
+
+func TestExecuteStreamRequestOpenAIResponsesFormat(t *testing.T) {
+	sseChunkData := `event: response.reasoning_text.delta
+data: {"content_index":0,"delta":"Let me think. ","type":"response.reasoning_text.delta"}
+event: response.reasoning_text.delta
+data: {"content_index":0,"delta":"Done thinking.","type":"response.reasoning_text.delta"}
+event: response.output_text.delta
+data: {"content_index":0,"delta":"The answer is ","type":"response.output_text.delta"}
+event: response.output_text.delta
+data: {"content_index":0,"delta":"42.","type":"response.output_text.delta"}
+event: response.completed
+data: {"response":{"id":"resp-1","output":[],"status":"completed","usage":{"input_tokens":5,"output_tokens":10,"total_tokens":15}},"type":"response.completed"}
+`
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(sseChunkData))
+	}))
+	defer server.Close()
+
+	ch := make(chan StreamChunkMsg, 50)
+	go ExecuteStreamRequest(server.URL, "", APITypeOpenAIResponses, `{"model":"deepseek-v4-flash","stream":true}`, ch)
+
+	var fullContent strings.Builder
+	var fullReasoning strings.Builder
+	var finalPromptTokens, finalCompletionTokens, finalTotalTokens int
+	var isDone bool
+
+	for msg := range ch {
+		if msg.ContentDelta != "" {
+			fullContent.WriteString(msg.ContentDelta)
+		}
+		if msg.ReasoningDelta != "" {
+			fullReasoning.WriteString(msg.ReasoningDelta)
+		}
+		if msg.PromptTokens > 0 {
+			finalPromptTokens = msg.PromptTokens
+		}
+		if msg.CompletionTokens > 0 {
+			finalCompletionTokens = msg.CompletionTokens
+		}
+		if msg.TotalTokens > 0 {
+			finalTotalTokens = msg.TotalTokens
+		}
+		if msg.Done {
+			isDone = true
+		}
+	}
+
+	if fullReasoning.String() != "Let me think. Done thinking." {
+		t.Errorf("unexpected reasoning content: %q", fullReasoning.String())
+	}
+	if fullContent.String() != "The answer is 42." {
+		t.Errorf("unexpected answer content: %q", fullContent.String())
+	}
+	if finalPromptTokens != 5 || finalCompletionTokens != 10 || finalTotalTokens != 15 {
+		t.Errorf("unexpected token usage stats: P=%d, C=%d, T=%d", finalPromptTokens, finalCompletionTokens, finalTotalTokens)
+	}
+	if !isDone {
+		t.Errorf("expected stream to mark Done: true")
+	}
+}
