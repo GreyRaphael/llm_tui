@@ -16,6 +16,19 @@ import (
 	"golang.org/x/text/transform"
 )
 
+// setAuthHeaders configures provider auth headers. When apiKey is empty, no
+// auth header is sent, allowing providers and local servers that require no key.
+func setAuthHeaders(h http.Header, apiType, apiKey string) {
+	if strings.TrimSpace(apiKey) == "" {
+		return
+	}
+	if apiType == APITypeAnthropic {
+		h.Set("x-api-key", apiKey)
+	} else {
+		h.Set("Authorization", "Bearer "+apiKey)
+	}
+}
+
 // ExecuteStreamRequest dispatches the test payload to target API endpoint and streams chunks over msgChan
 func ExecuteStreamRequest(baseURL, apiKey, apiType, payloadJSON string, msgChan chan<- StreamChunkMsg) {
 	defer close(msgChan)
@@ -54,11 +67,9 @@ func ExecuteStreamRequest(baseURL, apiKey, apiType, payloadJSON string, msgChan 
 
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "text/event-stream")
+	setAuthHeaders(req.Header, apiType, apiKey)
 	if apiType == APITypeAnthropic {
-		req.Header.Set("x-api-key", apiKey)
 		req.Header.Set("anthropic-version", "2023-06-01")
-	} else {
-		req.Header.Set("Authorization", "Bearer "+apiKey)
 	}
 
 	client := &http.Client{}
@@ -335,11 +346,9 @@ func ExecuteTestRequest(baseURL, apiKey, apiType, payloadJSON string) *TestResul
 	}
 
 	req.Header.Set("Content-Type", "application/json")
+	setAuthHeaders(req.Header, apiType, apiKey)
 	if apiType == APITypeAnthropic {
-		req.Header.Set("x-api-key", apiKey)
 		req.Header.Set("anthropic-version", "2023-06-01")
-	} else {
-		req.Header.Set("Authorization", "Bearer "+apiKey)
 	}
 
 	client := &http.Client{}

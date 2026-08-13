@@ -75,7 +75,7 @@ func (d *DB) migrate() error {
 		id INTEGER PRIMARY KEY AUTOINCREMENT,
 		name TEXT NOT NULL,
 		base_url TEXT NOT NULL,
-		api_key TEXT NOT NULL,
+		api_key TEXT,
 		api_type TEXT NOT NULL,
 		model TEXT NOT NULL,
 		reasoning_effort TEXT NOT NULL DEFAULT 'none',
@@ -84,6 +84,69 @@ func (d *DB) migrate() error {
 		updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
 	);
 	`
-	_, err := d.Exec(query)
-	return err
+	if _, err := d.Exec(query); err != nil {
+		return err
+	}
+	return d.migrateAPIKeyNullable()
+}
+
+// migrateAPIKeyNullable relaxes the api_key column on databases created before
+// empty API keys were supported (older schema used api_key TEXT NOT NULL).
+func (d *DB) migrateAPIKeyNullable() error {
+	rows, err := d.Query("PRAGMA table_info(provider_records)")
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+
+	apiKeyNotNull := false
+	for rows.Next() {
+		var cid int
+		var name, ctype string
+		var notNull, pk int
+		var dfltValue interface{}
+		if err := rows.Scan(&cid, &name, &ctype, &notNull, &dfltValue, &pk); err != nil {
+			return err
+		}
+		if name == "api_key" && notNull == 1 {
+			apiKeyNotNull = true
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	if !apiKeyNotNull {
+		return nil
+	}
+
+	// SQLite cannot drop a NOT NULL constraint in place; rebuild the table.
+	tx, err := d.Begin()
+	if err != nil {
+		return err
+	}
+	rebuild := []string{
+		`CREATE TABLE provider_records_new (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			name TEXT NOT NULL,
+			base_url TEXT NOT NULL,
+			api_key TEXT,
+			api_type TEXT NOT NULL,
+			model TEXT NOT NULL,
+			reasoning_effort TEXT NOT NULL DEFAULT 'none',
+			custom_payload TEXT,
+			created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+			updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+		)`,
+		`INSERT INTO provider_records_new (id, name, base_url, api_key, api_type, model, reasoning_effort, custom_payload, created_at, updated_at)
+			SELECT id, name, base_url, api_key, api_type, model, reasoning_effort, custom_payload, created_at, updated_at FROM provider_records`,
+		`DROP TABLE provider_records`,
+		`ALTER TABLE provider_records_new RENAME TO provider_records`,
+	}
+	for _, stmt := range rebuild {
+		if _, err := tx.Exec(stmt); err != nil {
+			_ = tx.Rollback()
+			return err
+		}
+	}
+	return tx.Commit()
 }

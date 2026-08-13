@@ -89,7 +89,11 @@ func ProbeProviderWithModel(baseURL, apiKey, modelName string) (*ProbeResult, er
 			},
 		})
 
-		supported, msg := probeEndpoint(ctx, client, urls, "Authorization", "Bearer "+apiKey, payload)
+		authVal := ""
+		if strings.TrimSpace(apiKey) != "" {
+			authVal = "Bearer " + apiKey
+		}
+		supported, msg := probeEndpoint(ctx, client, urls, "Authorization", authVal, payload)
 		addResult(APITypeOpenAIChat, msg, supported)
 	}()
 
@@ -103,7 +107,11 @@ func ProbeProviderWithModel(baseURL, apiKey, modelName string) (*ProbeResult, er
 			"input": "hi",
 		})
 
-		supported, msg := probeEndpoint(ctx, client, urls, "Authorization", "Bearer "+apiKey, payload)
+		authVal := ""
+		if strings.TrimSpace(apiKey) != "" {
+			authVal = "Bearer " + apiKey
+		}
+		supported, msg := probeEndpoint(ctx, client, urls, "Authorization", authVal, payload)
 		addResult(APITypeOpenAIResponses, msg, supported)
 	}()
 
@@ -152,7 +160,9 @@ func probeEndpoint(ctx context.Context, client *http.Client, urls []string, auth
 			continue
 		}
 		req.Header.Set("Content-Type", "application/json")
-		req.Header.Set(authHeader, authVal)
+		if strings.TrimSpace(authVal) != "" {
+			req.Header.Set(authHeader, authVal)
+		}
 
 		resp, err := client.Do(req)
 		if err != nil {
@@ -187,8 +197,10 @@ func probeEndpointAnthropic(ctx context.Context, client *http.Client, urls []str
 			continue
 		}
 		req.Header.Set("Content-Type", "application/json")
-		req.Header.Set("x-api-key", apiKey)
 		req.Header.Set("anthropic-version", "2023-06-01")
+		if strings.TrimSpace(apiKey) != "" {
+			req.Header.Set("x-api-key", apiKey)
+		}
 
 		resp, err := client.Do(req)
 		if err != nil {
@@ -251,8 +263,10 @@ func FetchModels(baseURL, apiKey string) ([]string, error) {
 		if err != nil {
 			continue
 		}
-		req.Header.Set("Authorization", "Bearer "+apiKey)
-		req.Header.Set("x-api-key", apiKey)
+		if strings.TrimSpace(apiKey) != "" {
+			req.Header.Set("Authorization", "Bearer "+apiKey)
+			req.Header.Set("x-api-key", apiKey)
+		}
 		req.Header.Set("anthropic-version", "2023-06-01")
 
 		resp, err := client.Do(req)

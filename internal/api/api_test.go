@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 )
 
@@ -116,6 +117,79 @@ data:[DONE]`
 	}
 	if !strings.Contains(res.FormattedBody, "Thinking... Done thinking.") {
 		t.Errorf("expected assembled reasoning_content text, got %s", res.FormattedBody)
+	}
+}
+
+func TestExecuteRequestOmitsAuthHeaderWhenKeyEmpty(t *testing.T) {
+	gotAuth := ""
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotAuth = r.Header.Get("Authorization")
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"id":"ok","choices":[],"usage":{}}`))
+	}))
+	defer server.Close()
+
+	res := ExecuteTestRequest(server.URL, "", APITypeOpenAIChat, `{"model":"test"}`)
+	if res.Error != "" {
+		t.Fatalf("unexpected error: %s", res.Error)
+	}
+	if res.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200 OK, got %d", res.StatusCode)
+	}
+	if gotAuth != "" {
+		t.Errorf("expected no Authorization header for empty key, got %q", gotAuth)
+	}
+}
+
+func TestFetchModelsOmitsAuthHeaderWhenKeyEmpty(t *testing.T) {
+	gotAuthorization := "sent"
+	gotXAPIKey := "sent"
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotAuthorization = r.Header.Get("Authorization")
+		gotXAPIKey = r.Header.Get("x-api-key")
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"data":[{"id":"test-model"}]}`))
+	}))
+	defer server.Close()
+
+	models, err := FetchModels(server.URL, "")
+	if err != nil {
+		t.Fatalf("FetchModels error: %v", err)
+	}
+	if len(models) != 1 || models[0] != "test-model" {
+		t.Fatalf("unexpected models: %v", models)
+	}
+	if gotAuthorization != "" {
+		t.Errorf("expected no Authorization header for empty key, got %q", gotAuthorization)
+	}
+	if gotXAPIKey != "" {
+		t.Errorf("expected no x-api-key header for empty key, got %q", gotXAPIKey)
+	}
+}
+
+func TestProbeWithEmptyKey(t *testing.T) {
+	var authCount int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") != "" {
+			atomic.AddInt32(&authCount, 1)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"id":"chatcmpl-1","choices":[],"usage":{}}`))
+	}))
+	defer server.Close()
+
+	res, err := ProbeProviderWithModel(server.URL, "", "test-model")
+	if err != nil {
+		t.Fatalf("ProbeProviderWithModel with empty key error: %v", err)
+	}
+	if len(res.SupportedAPITypes) == 0 {
+		t.Fatal("expected supported API types for no-auth server")
+	}
+	if n := atomic.LoadInt32(&authCount); n != 0 {
+		t.Errorf("expected no request to carry an Authorization header for empty key, got %d", n)
 	}
 }
 
@@ -257,4 +331,3 @@ data: [DONE]`
 		t.Errorf("unexpected token usage stats: P=%d, C=%d, T=%d", finalPromptTokens, finalCompletionTokens, finalTotalTokens)
 	}
 }
-

@@ -255,6 +255,31 @@ func TestProbeModel_Resize(t *testing.T) {
 	}
 }
 
+func TestProbeModel_AllowsEmptyAPIKey(t *testing.T) {
+	database, err := db.InitDB(":memory:")
+	if err != nil {
+		t.Fatalf("failed to init memory db: %v", err)
+	}
+	defer database.Close()
+
+	m := NewProbeModel(database)
+	if m.Step != StepInputCredentials {
+		t.Fatalf("expected start at StepInputCredentials, got %v", m.Step)
+	}
+
+	// Enter a Base URL, leave API Key empty, then submit.
+	m.BaseURLInput.SetValue("https://api.example.com")
+	m, _, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+
+	if m.StatusMsg == "Please enter a Base URL" {
+		t.Fatalf("empty API key should not block Base URL-only submission")
+	}
+	// Enter with empty API key should proceed to fetching models.
+	if m.Step != StepFetchingModels {
+		t.Fatalf("expected StepFetchingModels after submitting with empty API key, got %v (msg=%q)", m.Step, m.StatusMsg)
+	}
+}
+
 func TestTesterModel_StreamMsgUpdate(t *testing.T) {
 	database, err := db.InitDB(":memory:")
 	if err != nil {
@@ -404,7 +429,6 @@ func TestTesterModel_MarkdownRendering(t *testing.T) {
 		t.Fatalf("expected non-empty viewport view after markdown rendering")
 	}
 }
-
 
 
 

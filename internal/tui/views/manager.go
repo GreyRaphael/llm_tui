@@ -157,7 +157,7 @@ func (m ManagerModel) View() string {
 	if len(m.Records) == 0 {
 		emptyCard := normalCardStyle.Render(
 			lipgloss.NewStyle().Foreground(styles.ColorMuted).Render(
-				"No LLM Providers configured.\nPress 'n' to enter Base URL & API Key for auto-detection probing.",
+				"No LLM Providers configured.\nPress 'n' to enter Base URL & optional API Key for auto-detection probing.",
 			),
 		)
 		sb.WriteString(emptyCard + "\n")

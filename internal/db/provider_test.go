@@ -1,6 +1,8 @@
 package db
 
 import (
+	"database/sql"
+	"path/filepath"
 	"testing"
 )
 
@@ -119,4 +121,104 @@ func TestProviderRecordCRUD(t *testing.T) {
 	if len(records) != 1 {
 		t.Fatalf("expected 1 record after delete, got %d", len(records))
 	}
+}
+
+func TestProviderRecordEmptyAPIKey(t *testing.T) {
+	database, err := InitDB(":memory:")
+	if err != nil {
+		t.Fatalf("failed to init memory db: %v", err)
+	}
+	defer database.Close()
+
+	rec := &ProviderRecord{
+		Name:            "Local No-Auth",
+		BaseURL:         "http://localhost:8080/v1",
+		APIKey:          "",
+		APIType:         "openai_chat",
+		Model:           "my-model",
+		ReasoningEffort: ReasoningEffortNone,
+	}
+	if err := database.CreateRecord(rec); err != nil {
+		t.Fatalf("CreateRecord with empty APIKey failed: %v", err)
+	}
+
+	fetched, err := database.GetRecordByID(rec.ID)
+	if err != nil {
+		t.Fatalf("GetRecordByID failed: %v", err)
+	}
+	if fetched.APIKey != "" {
+		t.Errorf("expected empty APIKey, got %q", fetched.APIKey)
+	}
+
+	// GetAPIKeyByBaseURL must not conflate an empty key with "no saved record".
+	// For now it returns "" for empty keys by design.
+	if key := database.GetAPIKeyByBaseURL("http://localhost:8080"); key != "" {
+		t.Errorf("expected empty APIKey lookup, got %q", key)
+	}
+}
+
+func TestMigrateAPIKeyNotNull(t *testing.T) {
+	dir := t.TempDir()
+	dbPath := filepath.Join(dir, "providers.db")
+
+	// Simulate a database created before empty API keys were supported.
+	conn, err := sql.Open("sqlite", dbPath)
+	if err != nil {
+		t.Fatalf("failed to open legacy db: %v", err)
+	}
+	_, err = conn.Exec(`
+		CREATE TABLE provider_records (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			name TEXT NOT NULL,
+			base_url TEXT NOT NULL,
+			api_key TEXT NOT NULL,
+			api_type TEXT NOT NULL,
+			model TEXT NOT NULL,
+			reasoning_effort TEXT NOT NULL DEFAULT 'none',
+			custom_payload TEXT,
+			created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+			updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+		)
+	`)
+	if err != nil {
+		t.Fatalf("failed to create legacy schema: %v", err)
+	}
+	_, err = conn.Exec(
+		`INSERT INTO provider_records (name, base_url, api_key, api_type, model) VALUES (?, ?, ?, ?, ?)`,
+		"Legacy", "https://api.example.com", "sk-old", "openai_chat", "gpt-4o",
+	)
+	if err != nil {
+		t.Fatalf("failed to seed legacy row: %v", err)
+	}
+	if err := conn.Close(); err != nil {
+		t.Fatalf("failed to close legacy conn: %v", err)
+	}
+
+	database, err := InitDB(dbPath)
+	if err != nil {
+		t.Fatalf("InitDB migration failed: %v", err)
+	}
+	defer database.Close()
+
+	// Existing data should survive the migration.
+	records, err := database.ListRecords()
+	if err != nil {
+		t.Fatalf("ListRecords after migration failed: %v", err)
+	}
+	if len(records) != 1 || records[0].APIKey != "sk-old" {
+		t.Fatalf("legacy data lost after migration: %+v", records)
+	}
+
+	// Empty api_key should now be storable.
+	if err := database.CreateRecord(&ProviderRecord{
+		Name:            "New No-Auth",
+		BaseURL:         "http://localhost:9000",
+		APIKey:          "",
+		APIType:         "openai_chat",
+		Model:           "model-x",
+		ReasoningEffort: ReasoningEffortNone,
+	}); err != nil {
+		t.Fatalf("CreateRecord with empty api_key after migration failed: %v", err)
+	}
+
 }

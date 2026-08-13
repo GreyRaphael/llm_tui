@@ -63,7 +63,7 @@ func NewProbeModel(database *db.DB) ProbeModel {
 	baseUrlIn.Width = 50
 
 	apiKeyIn := textinput.New()
-	apiKeyIn.Placeholder = "sk-..."
+	apiKeyIn.Placeholder = "sk-... (optional, leave empty for no auth)"
 	apiKeyIn.EchoMode = textinput.EchoPassword
 	apiKeyIn.EchoCharacter = '•'
 	apiKeyIn.CharLimit = 256
@@ -174,8 +174,8 @@ func (m ProbeModel) Update(msg tea.Msg) (ProbeModel, tea.Cmd, string) {
 			switch m.Step {
 			case StepInputCredentials:
 				m.checkAutofillAPIKey()
-				if strings.TrimSpace(m.BaseURLInput.Value()) == "" || strings.TrimSpace(m.APIKeyInput.Value()) == "" {
-					m.StatusMsg = "Please enter both Base URL and API Key"
+				if strings.TrimSpace(m.BaseURLInput.Value()) == "" {
+					m.StatusMsg = "Please enter a Base URL"
 					m.IsError = true
 					return m, nil, ""
 				}
