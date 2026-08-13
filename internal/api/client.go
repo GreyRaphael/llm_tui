@@ -363,11 +363,13 @@ func ExecuteTestRequest(baseURL, apiKey, apiType, payloadJSON string) *TestResul
 	bodyStr := decodeGBKIfNeeded(bodyBytes)
 	res.RawBody = bodyStr
 
-	// Check if response is a JSON error (e.g., LiteLLM wrapping SSE data in error message)
+	// Check if response is a JSON error (e.g., LiteLLM wrapping SSE data in error
+	// message). A present but null "error" key (common in OpenAI Responses
+	// non-stream payloads) must NOT trigger the error path.
 	isErrorJSON := false
 	var genericCheck map[string]interface{}
 	if err := json.Unmarshal([]byte(bodyStr), &genericCheck); err == nil {
-		if _, hasErr := genericCheck["error"]; hasErr {
+		if errVal, ok := genericCheck["error"]; ok && errVal != nil {
 			isErrorJSON = true
 		}
 	}

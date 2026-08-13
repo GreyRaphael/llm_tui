@@ -142,6 +142,33 @@ func TestExecuteRequestOmitsAuthHeaderWhenKeyEmpty(t *testing.T) {
 	}
 }
 
+func TestExecuteRequestFormatsNullErrorResponses(t *testing.T) {
+	// OpenAI Responses non-stream payloads include an "error": null field even
+	// on success. A present-but-null error key must not suppress formatting.
+	raw := `{"id":"resp-1","object":"response","status":"completed","error":null,"output":[{"type":"message","content":[{"type":"output_text","text":"Hello"}]}],"usage":{"input_tokens":1,"output_tokens":1,"total_tokens":2}}`
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(raw))
+	}))
+	defer server.Close()
+
+	res := ExecuteTestRequest(server.URL, "", APITypeOpenAIResponses, `{"model":"deepseek-v4-flash","stream":false}`)
+	if res.Error != "" {
+		t.Fatalf("unexpected error: %s", res.Error)
+	}
+	if res.FormattedBody == raw {
+		t.Fatal("expected FormattedBody to be pretty-printed for a null-error success response")
+	}
+	if !strings.Contains(res.FormattedBody, "  \"id\": \"resp-1\"") {
+		t.Fatalf("expected indented JSON, got: %s", res.FormattedBody)
+	}
+	if res.PromptTokens != 1 || res.CompletionTokens != 1 || res.TotalTokens != 2 {
+		t.Fatalf("unexpected token usage: P=%d C=%d T=%d", res.PromptTokens, res.CompletionTokens, res.TotalTokens)
+	}
+}
+
 func TestFetchModelsOmitsAuthHeaderWhenKeyEmpty(t *testing.T) {
 	gotAuthorization := "sent"
 	gotXAPIKey := "sent"
