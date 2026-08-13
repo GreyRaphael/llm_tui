@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"sort"
 	"strings"
 	"sync"
@@ -256,6 +257,12 @@ func FetchModels(baseURL, apiKey string) ([]string, error) {
 	}
 
 	urls := BuildEndpointURLs(norm, "/models")
+	// Some gateways (e.g. https://api.deepseek.com/xxx) only serve the
+	// OpenAI-style model list at the root base rather than under a path prefix.
+	// Try the prefix-specific URLs first, then fall back to the root base.
+	if root := rootBaseURL(norm); root != "" && root != norm {
+		urls = append(urls, BuildEndpointURLs(root, "/models")...)
+	}
 	client := &http.Client{Timeout: 15 * time.Second}
 
 	for _, targetURL := range urls {
@@ -294,4 +301,17 @@ func FetchModels(baseURL, apiKey string) ([]string, error) {
 		}
 	}
 	return nil, nil
+}
+
+// rootBaseURL returns the scheme://host portion of a normalized base URL.
+func rootBaseURL(norm string) string {
+	u, err := url.Parse(norm)
+	if err != nil {
+		return ""
+	}
+	u.Path = ""
+	u.RawPath = ""
+	u.RawQuery = ""
+	u.Fragment = ""
+	return u.String()
 }

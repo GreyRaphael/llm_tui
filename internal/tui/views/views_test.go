@@ -280,6 +280,48 @@ func TestProbeModel_AllowsEmptyAPIKey(t *testing.T) {
 	}
 }
 
+func TestProbeModel_RequiresManualModelWhenFetchFails(t *testing.T) {
+	database, err := db.InitDB(":memory:")
+	if err != nil {
+		t.Fatalf("failed to init memory db: %v", err)
+	}
+	defer database.Close()
+
+	m := NewProbeModel(database)
+	m.Step = StepFetchingModels
+
+	// No models discovered: input must not be pre-filled with a default model.
+	m, _, _ = m.Update(modelsFetchedMsg{models: nil, err: nil})
+	if m.Step != StepSelectModel {
+		t.Fatalf("expected StepSelectModel, got %v", m.Step)
+	}
+	if got := m.ModelInput.Value(); got != "" {
+		t.Fatalf("expected empty model input on fetch failure, got %q", got)
+	}
+	if m.SelectedModel != "" {
+		t.Fatalf("expected empty SelectedModel on fetch failure, got %q", m.SelectedModel)
+	}
+
+	// Pressing Enter with no model must be rejected.
+	m, _, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if m.Step != StepSelectModel {
+		t.Fatalf("expected still StepSelectModel when no model entered, got %v", m.Step)
+	}
+	if !m.IsError {
+		t.Fatal("expected error when submitting without a model")
+	}
+
+	// Entering a model id manually should proceed to probing.
+	m.ModelInput.SetValue("deepseek-v4-flash")
+	m, _, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if m.Step != StepProbing {
+		t.Fatalf("expected StepProbing after manual model entry, got %v", m.Step)
+	}
+	if m.SelectedModel != "deepseek-v4-flash" {
+		t.Fatalf("expected SelectedModel to be manual entry, got %q", m.SelectedModel)
+	}
+}
+
 func TestProbeModel_APITypeSwitchKeepsAliasInSync(t *testing.T) {
 	database, err := db.InitDB(":memory:")
 	if err != nil {
@@ -521,4 +563,3 @@ func TestTesterModel_MarkdownRendering(t *testing.T) {
 		t.Fatalf("expected non-empty viewport view after markdown rendering")
 	}
 }
-

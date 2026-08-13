@@ -169,6 +169,44 @@ func TestFetchModelsOmitsAuthHeaderWhenKeyEmpty(t *testing.T) {
 	}
 }
 
+func TestFetchModelsFallsBackToRootForPrefixedBase(t *testing.T) {
+	var requested []string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requested = append(requested, r.URL.Path)
+		switch r.URL.Path {
+		case "/v1/models", "/models":
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"data":[{"id":"deepseek-v4-flash"}]}`))
+		default:
+			w.WriteHeader(http.StatusNotFound)
+			_, _ = w.Write([]byte(`{"detail":"Not Found"}`))
+		}
+	}))
+	defer server.Close()
+
+	// The path prefix has no model list; the root base does. The fallback must
+	// work for any prefix, not just /anthropic.
+	baseURL := server.URL + "/any-prefix"
+	models, err := FetchModels(baseURL, "")
+	if err != nil {
+		t.Fatalf("FetchModels error: %v", err)
+	}
+	if len(models) != 1 || models[0] != "deepseek-v4-flash" {
+		t.Fatalf("expected models from root fallback, got %v", models)
+	}
+	// Verify prefixed URLs were tried before the root fallback.
+	expected := []string{"/any-prefix/v1/models", "/any-prefix/models", "/v1/models"}
+	if len(requested) < len(expected) {
+		t.Fatalf("expected at least %d requests, got %d: %v", len(expected), len(requested), requested)
+	}
+	for i := range expected {
+		if requested[i] != expected[i] {
+			t.Fatalf("request order mismatch at %d: got %q, want %q (all=%v)", i, requested[i], expected[i], requested)
+		}
+	}
+}
+
 func TestProbeWithEmptyKey(t *testing.T) {
 	var authCount int32
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

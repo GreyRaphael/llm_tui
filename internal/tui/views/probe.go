@@ -123,8 +123,12 @@ func (m ProbeModel) Update(msg tea.Msg) (ProbeModel, tea.Cmd, string) {
 			m.ModelInput.SetValue(m.SelectedModel)
 			m.StatusMsg = fmt.Sprintf("Discovered %d models via /models. Pick or specify one below.", len(m.DiscoveredModels))
 		} else {
-			m.ModelInput.SetValue("gpt-4o")
-			m.StatusMsg = "Could not fetch models automatically. Please specify your target model below."
+			// No models could be discovered; require the user to enter a model id
+			// manually instead of silently falling back to a default like gpt-4o.
+			m.SelectedModel = ""
+			m.ModelInput.SetValue("")
+			m.ModelCursor = 0
+			m.StatusMsg = "Could not fetch models automatically. Please enter the exact model id below."
 		}
 		m.ModelInput.Focus()
 		m.IsError = false
