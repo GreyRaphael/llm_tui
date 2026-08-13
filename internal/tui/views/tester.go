@@ -343,7 +343,7 @@ func (m TesterModel) Update(msg tea.Msg) (TesterModel, tea.Cmd, string) {
 				if len(m.DiscoveredModels) > 0 && m.ModelIndex < len(m.DiscoveredModels) {
 					newModel := m.DiscoveredModels[m.ModelIndex]
 					m.Record.Model = newModel
-					m.Record.Name = fmt.Sprintf("%s (%s)", newModel, m.Record.APIType)
+					m.Record.Name = newModel
 					// Preserve current stream setting when regenerating template
 					currentStream := true
 					var oldPayload map[string]interface{}
@@ -813,4 +813,3 @@ func (m TesterModel) View() string {
 
 	return sb.String()
 }
-

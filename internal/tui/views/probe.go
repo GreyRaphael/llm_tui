@@ -146,7 +146,7 @@ func (m ProbeModel) Update(msg tea.Msg) (ProbeModel, tea.Cmd, string) {
 		}
 		m.Step = StepSelectAPITypeAndName
 		m.SelectedAPIType = msg.result.SupportedAPITypes[0]
-		m.NameInput.SetValue(fmt.Sprintf("%s (%s)", m.SelectedModel, m.SelectedAPIType))
+		m.NameInput.SetValue(m.SelectedModel)
 		m.NameInput.Focus()
 		return m, textinput.Blink, ""
 
@@ -209,7 +209,7 @@ func (m ProbeModel) Update(msg tea.Msg) (ProbeModel, tea.Cmd, string) {
 				}
 				aliasName := strings.TrimSpace(m.NameInput.Value())
 				if aliasName == "" {
-					aliasName = fmt.Sprintf("%s (%s)", m.SelectedModel, m.SelectedAPIType)
+					aliasName = m.SelectedModel
 				}
 
 				rec := &db.ProviderRecord{
@@ -240,7 +240,7 @@ func (m ProbeModel) Update(msg tea.Msg) (ProbeModel, tea.Cmd, string) {
 				}
 			} else if m.Step == StepSelectAPITypeAndName && m.ProbeResult != nil {
 				if m.APITypeCursor > 0 {
-					m.APITypeCursor--
+					m.selectAPIType(m.APITypeCursor - 1)
 				}
 			}
 
@@ -253,7 +253,7 @@ func (m ProbeModel) Update(msg tea.Msg) (ProbeModel, tea.Cmd, string) {
 				}
 			} else if m.Step == StepSelectAPITypeAndName && m.ProbeResult != nil {
 				if m.APITypeCursor < len(m.ProbeResult.SupportedAPITypes)-1 {
-					m.APITypeCursor++
+					m.selectAPIType(m.APITypeCursor + 1)
 				}
 			}
 		}
@@ -277,6 +277,31 @@ func (m ProbeModel) Update(msg tea.Msg) (ProbeModel, tea.Cmd, string) {
 	}
 
 	return m, cmd, action
+}
+
+// selectAPIType moves the API type cursor and keeps the auto-generated alias in
+// sync with the selected type, without overwriting a user-customized name.
+func (m *ProbeModel) selectAPIType(cursor int) {
+	if m.ProbeResult == nil || len(m.ProbeResult.SupportedAPITypes) == 0 {
+		return
+	}
+	if cursor < 0 {
+		cursor = 0
+	} else if cursor >= len(m.ProbeResult.SupportedAPITypes) {
+		cursor = len(m.ProbeResult.SupportedAPITypes) - 1
+	}
+
+	oldType := m.SelectedAPIType
+	m.APITypeCursor = cursor
+	m.SelectedAPIType = m.ProbeResult.SupportedAPITypes[cursor]
+
+	if oldType == m.SelectedAPIType || m.SelectedModel == "" {
+		return
+	}
+	oldDefault := fmt.Sprintf("%s (%s)", m.SelectedModel, oldType)
+	if m.NameInput.Value() == oldDefault || m.NameInput.Value() == m.SelectedModel {
+		m.NameInput.SetValue(m.SelectedModel)
+	}
 }
 
 func (m *ProbeModel) checkAutofillAPIKey() {

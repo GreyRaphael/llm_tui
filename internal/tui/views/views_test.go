@@ -280,6 +280,98 @@ func TestProbeModel_AllowsEmptyAPIKey(t *testing.T) {
 	}
 }
 
+func TestProbeModel_APITypeSwitchKeepsAliasInSync(t *testing.T) {
+	database, err := db.InitDB(":memory:")
+	if err != nil {
+		t.Fatalf("failed to init memory db: %v", err)
+	}
+	defer database.Close()
+
+	m := NewProbeModel(database)
+	m.Step = StepSelectAPITypeAndName
+	m.SelectedModel = "deepseek-v4-flash"
+	m.ProbeResult = &api.ProbeResult{
+		BaseURL:           "https://api.example.com",
+		SupportedAPITypes: []string{api.APITypeOpenAIResponses, api.APITypeAnthropic},
+	}
+	m.SelectedAPIType = api.APITypeOpenAIResponses
+	m.APITypeCursor = 0
+	m.NameInput.SetValue("deepseek-v4-flash")
+
+	// Move down to the second API type; the auto-generated alias must follow.
+	m, _, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'j'}})
+	if m.SelectedAPIType != api.APITypeAnthropic {
+		t.Fatalf("expected selected API type anthropic, got %q", m.SelectedAPIType)
+	}
+	if got := m.NameInput.Value(); got != "deepseek-v4-flash" {
+		t.Fatalf("expected alias to follow selected API type, got %q", got)
+	}
+
+	m, _, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	records, err := database.ListRecords()
+	if err != nil {
+		t.Fatalf("ListRecords failed: %v", err)
+	}
+	if len(records) != 1 {
+		t.Fatalf("expected 1 saved record, got %d", len(records))
+	}
+	if records[0].APIType != api.APITypeAnthropic {
+		t.Errorf("expected saved APIType anthropic, got %q", records[0].APIType)
+	}
+	if records[0].Name != "deepseek-v4-flash" {
+		t.Errorf("expected alias to match saved APIType, got %q", records[0].Name)
+	}
+}
+
+func TestProbeModel_APITypeSwitchUpdatesLegacyAlias(t *testing.T) {
+	database, err := db.InitDB(":memory:")
+	if err != nil {
+		t.Fatalf("failed to init memory db: %v", err)
+	}
+	defer database.Close()
+
+	m := NewProbeModel(database)
+	m.Step = StepSelectAPITypeAndName
+	m.SelectedModel = "deepseek-v4-flash"
+	m.ProbeResult = &api.ProbeResult{
+		BaseURL:           "https://api.example.com",
+		SupportedAPITypes: []string{api.APITypeOpenAIResponses, api.APITypeAnthropic},
+	}
+	m.SelectedAPIType = api.APITypeOpenAIResponses
+	m.APITypeCursor = 0
+	// Simulate a record that was created before the suffix was dropped.
+	m.NameInput.SetValue("deepseek-v4-flash (openai_responses)")
+
+	m, _, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'j'}})
+	if got := m.NameInput.Value(); got != "deepseek-v4-flash" {
+		t.Fatalf("expected legacy alias revisited, got %q", got)
+	}
+}
+
+func TestProbeModel_APITypeSwitchPreservesCustomName(t *testing.T) {
+	database, err := db.InitDB(":memory:")
+	if err != nil {
+		t.Fatalf("failed to init memory db: %v", err)
+	}
+	defer database.Close()
+
+	m := NewProbeModel(database)
+	m.Step = StepSelectAPITypeAndName
+	m.SelectedModel = "deepseek-v4-flash"
+	m.ProbeResult = &api.ProbeResult{
+		BaseURL:           "https://api.example.com",
+		SupportedAPITypes: []string{api.APITypeOpenAIResponses, api.APITypeAnthropic},
+	}
+	m.SelectedAPIType = api.APITypeOpenAIResponses
+	m.APITypeCursor = 0
+	m.NameInput.SetValue("My DeepSeek Instance")
+
+	m, _, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'j'}})
+	if got := m.NameInput.Value(); got != "My DeepSeek Instance" {
+		t.Fatalf("custom name should not be overwritten, got %q", got)
+	}
+}
+
 func TestTesterModel_StreamMsgUpdate(t *testing.T) {
 	database, err := db.InitDB(":memory:")
 	if err != nil {
@@ -429,6 +521,4 @@ func TestTesterModel_MarkdownRendering(t *testing.T) {
 		t.Fatalf("expected non-empty viewport view after markdown rendering")
 	}
 }
-
-
 

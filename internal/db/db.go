@@ -87,7 +87,21 @@ func (d *DB) migrate() error {
 	if _, err := d.Exec(query); err != nil {
 		return err
 	}
-	return d.migrateAPIKeyNullable()
+	if err := d.migrateAPIKeyNullable(); err != nil {
+		return err
+	}
+	return d.migrateAliasNames()
+}
+
+// migrateAliasNames drops the redundant ` (api_type)` suffix that older versions
+// appended to auto-generated aliases (e.g. "gpt-4o (openai_chat)" -> "gpt-4o").
+func (d *DB) migrateAliasNames() error {
+	_, err := d.Exec(`
+		UPDATE provider_records
+		SET name = TRIM(SUBSTR(name, 1, LENGTH(name) - LENGTH(api_type) - 3))
+		WHERE name LIKE '% (' || api_type || ')'
+	`)
+	return err
 }
 
 // migrateAPIKeyNullable relaxes the api_key column on databases created before

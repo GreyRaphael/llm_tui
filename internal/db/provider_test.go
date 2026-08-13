@@ -222,3 +222,51 @@ func TestMigrateAPIKeyNotNull(t *testing.T) {
 	}
 
 }
+
+func TestMigrateAliasNames(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "providers.db")
+	database, err := InitDB(dbPath)
+	if err != nil {
+		t.Fatalf("failed to init db: %v", err)
+	}
+
+	records := []*ProviderRecord{
+		{Name: "gpt-4o (openai_chat)", BaseURL: "https://a.example.com", APIType: "openai_chat", Model: "gpt-4o"},
+		{Name: "deepseek-v4-flash (anthropic_messages)", BaseURL: "https://b.example.com", APIType: "anthropic_messages", Model: "deepseek-v4-flash"},
+		{Name: "My Custom (kept) Name", BaseURL: "https://c.example.com", APIType: "openai_responses", Model: "x"},
+	}
+	for _, r := range records {
+		if err := database.CreateRecord(r); err != nil {
+			t.Fatalf("CreateRecord failed: %v", err)
+		}
+	}
+	if err := database.Close(); err != nil {
+		t.Fatalf("close failed: %v", err)
+	}
+
+	// Reopen to trigger migrations and normalize legacy aliases.
+	database, err = InitDB(dbPath)
+	if err != nil {
+		t.Fatalf("re-init db failed: %v", err)
+	}
+	defer database.Close()
+
+	got, err := database.ListRecords()
+	if err != nil {
+		t.Fatalf("ListRecords failed: %v", err)
+	}
+
+	names := map[string]string{}
+	for _, r := range got {
+		names[r.Name] = r.APIType
+	}
+	if names["gpt-4o"] != "openai_chat" {
+		t.Errorf("expected gpt-4o alias stripped, got %v", names)
+	}
+	if names["deepseek-v4-flash"] != "anthropic_messages" {
+		t.Errorf("expected deepseek-v4-flash alias stripped, got %v", names)
+	}
+	if names["My Custom (kept) Name"] != "openai_responses" {
+		t.Errorf("custom name should be preserved, got %v", names)
+	}
+}
