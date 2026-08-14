@@ -610,7 +610,7 @@ func (m TesterModel) View() string {
 	sb.WriteString(header + "\n\n")
 
 	// Info Card with Model Switcher Badge
-	modelBadge := fmt.Sprintf("Model: %s [Press 'm' to switch]", m.Record.Model)
+	modelBadge := fmt.Sprintf("Model: %s [Press Alt+M to switch]", m.Record.Model)
 	info := fmt.Sprintf(
 		"Base URL: %s | API Type: %s | %s",
 		m.Record.BaseURL,

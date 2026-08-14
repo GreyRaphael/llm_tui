@@ -29,6 +29,48 @@ func setAuthHeaders(h http.Header, apiType, apiKey string) {
 	}
 }
 
+// doPostWithFallback posts the payload to each candidate endpoint URL in order
+// and returns the first successful (200) response. It mirrors probeEndpoint's
+// fallback behavior so that a provider verified via a fallback URL during the
+// setup wizard remains reachable from the Chat Laboratory (which previously
+// only tried urls[0]).
+func doPostWithFallback(ctx context.Context, client *http.Client, urls []string, apiType, apiKey, payloadJSON string) (*http.Response, error) {
+	var lastResp *http.Response
+	var lastErr error
+	for _, targetURL := range urls {
+		req, err := http.NewRequestWithContext(ctx, "POST", targetURL, bytes.NewBufferString(payloadJSON))
+		if err != nil {
+			lastErr = err
+			continue
+		}
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("Accept", "text/event-stream")
+		setAuthHeaders(req.Header, apiType, apiKey)
+		if apiType == APITypeAnthropic {
+			req.Header.Set("anthropic-version", "2023-06-01")
+		}
+
+		resp, err := client.Do(req)
+		if err != nil {
+			lastErr = err
+			continue
+		}
+		if resp.StatusCode == http.StatusOK {
+			return resp, nil
+		}
+		// Keep a reference to the last non-200 response so callers can render
+		// its error body, and try the next candidate URL if any remain.
+		if lastResp != nil {
+			lastResp.Body.Close()
+		}
+		lastResp = resp
+	}
+	if lastResp != nil {
+		return lastResp, nil
+	}
+	return nil, lastErr
+}
+
 // ExecuteStreamRequest dispatches the test payload to target API endpoint and streams chunks over msgChan
 func ExecuteStreamRequest(baseURL, apiKey, apiType, payloadJSON string, msgChan chan<- StreamChunkMsg) {
 	defer close(msgChan)
@@ -54,30 +96,19 @@ func ExecuteStreamRequest(baseURL, apiKey, apiType, payloadJSON string, msgChan 
 		msgChan <- StreamChunkMsg{Err: fmt.Errorf("Failed to construct endpoint URL"), Done: true}
 		return
 	}
-	targetURL := urls[0]
 
 	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
 	defer cancel()
 
-	req, err := http.NewRequestWithContext(ctx, "POST", targetURL, bytes.NewBufferString(payloadJSON))
-	if err != nil {
-		msgChan <- StreamChunkMsg{Err: fmt.Errorf("Failed to create HTTP request: %v", err), Done: true}
-		return
-	}
-
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Accept", "text/event-stream")
-	setAuthHeaders(req.Header, apiType, apiKey)
-	if apiType == APITypeAnthropic {
-		req.Header.Set("anthropic-version", "2023-06-01")
-	}
-
 	client := &http.Client{}
 	startTime := time.Now()
-	resp, err := client.Do(req)
+	resp, err := doPostWithFallback(ctx, client, urls, apiType, apiKey, payloadJSON)
 	initialLatency := time.Since(startTime)
 
-	if err != nil {
+	if resp == nil {
+		if err == nil {
+			err = fmt.Errorf("no reachable endpoint")
+		}
 		msgChan <- StreamChunkMsg{Err: fmt.Errorf("HTTP execution error: %v", err), Latency: initialLatency, Done: true}
 		return
 	}
@@ -324,29 +355,19 @@ func ExecuteTestRequest(baseURL, apiKey, apiType, payloadJSON string) *TestResul
 		res.Error = "Failed to construct endpoint URL"
 		return res
 	}
-	targetURL := urls[0] // Primary normalized endpoint URL
 
 	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
 	defer cancel()
 
-	req, err := http.NewRequestWithContext(ctx, "POST", targetURL, bytes.NewBufferString(payloadJSON))
-	if err != nil {
-		res.Error = "Failed to create HTTP request: " + err.Error()
-		return res
-	}
-
-	req.Header.Set("Content-Type", "application/json")
-	setAuthHeaders(req.Header, apiType, apiKey)
-	if apiType == APITypeAnthropic {
-		req.Header.Set("anthropic-version", "2023-06-01")
-	}
-
 	client := &http.Client{}
 	startTime := time.Now()
-	resp, err := client.Do(req)
+	resp, err := doPostWithFallback(ctx, client, urls, apiType, apiKey, payloadJSON)
 	res.Latency = time.Since(startTime)
 
-	if err != nil {
+	if resp == nil {
+		if err == nil {
+			err = fmt.Errorf("no reachable endpoint")
+		}
 		res.Error = "HTTP execution error: " + err.Error()
 		return res
 	}
@@ -502,9 +523,9 @@ func assembleSSEResponse(body []byte, res *TestResult) string {
 	}
 
 	assembledMap := map[string]interface{}{
-		"id":      lastID,
-		"model":   lastModel,
-		"object":  "chat.completion",
+		"id":     lastID,
+		"model":  lastModel,
+		"object": "chat.completion",
 		"choices": []map[string]interface{}{
 			{
 				"index": 0,

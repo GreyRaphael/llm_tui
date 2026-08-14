@@ -17,8 +17,8 @@ func TestMaskAPIKey(t *testing.T) {
 	}{
 		{"", "******"},
 		{"sk-1234", "******"},
-		{"sk-12345", "******"},             // exactly 8 chars
-		{"sk-123456", "sk-1...3456"},       // 9 chars: first 4 + ... + last 4
+		{"sk-12345", "******"},       // exactly 8 chars
+		{"sk-123456", "sk-1...3456"}, // 9 chars: first 4 + ... + last 4
 		{"sk-abcdefghijklmnop", "sk-a...mnop"},
 	}
 
@@ -478,10 +478,10 @@ func TestTesterModel_StreamMsgUpdate(t *testing.T) {
 
 	// Send content chunk msg
 	m, _, _ = m.Update(api.StreamChunkMsg{
-		ContentDelta: "Hello World!",
-		PromptTokens: 10,
+		ContentDelta:     "Hello World!",
+		PromptTokens:     10,
 		CompletionTokens: 20,
-		TotalTokens: 30,
+		TotalTokens:      30,
 	})
 
 	if m.ReasoningText != "Analyzing request... " {
@@ -600,5 +600,77 @@ func TestTesterModel_MarkdownRendering(t *testing.T) {
 	viewportView := m.Viewport.View()
 	if len(viewportView) == 0 {
 		t.Fatalf("expected non-empty viewport view after markdown rendering")
+	}
+}
+
+func TestProbeModel_AutofillRespectsManualAPIKeyEdit(t *testing.T) {
+	database, err := db.InitDB(":memory:")
+	if err != nil {
+		t.Fatalf("failed to init memory db: %v", err)
+	}
+	defer database.Close()
+
+	_ = database.CreateRecord(&db.ProviderRecord{
+		Name:    "Saved",
+		BaseURL: "https://api.example.com",
+		APIKey:  "sk-saved",
+		APIType: "openai_chat",
+		Model:   "gpt-4o",
+	})
+
+	m := NewProbeModel(database)
+	m.BaseURLInput.SetValue("https://api.example.com")
+
+	// Auto-fills when the key field is empty.
+	m.checkAutofillAPIKey()
+	if got := m.APIKeyInput.Value(); got != "sk-saved" {
+		t.Fatalf("expected auto-filled key, got %q", got)
+	}
+
+	// A manual edit must never be overwritten by the autofill.
+	m.APIKeyInput.SetValue("sk-manual")
+	m.APIKeyEdited = true
+	m.checkAutofillAPIKey()
+	if got := m.APIKeyInput.Value(); got != "sk-manual" {
+		t.Fatalf("manual key was overwritten by autofill: got %q", got)
+	}
+
+	// Moving to a Base URL with no saved record should clear a stale auto-filled
+	// key (leak prevention) ...
+	m.APIKeyEdited = false
+	m.APIKeyInput.SetValue("")
+	m.BaseURLInput.SetValue("https://other.example.com")
+	m.checkAutofillAPIKey()
+	if got := m.APIKeyInput.Value(); got != "" {
+		t.Fatalf("expected stale auto-filled key cleared, got %q", got)
+	}
+
+	// ... but preserve an explicitly typed key.
+	m.APIKeyEdited = true
+	m.APIKeyInput.SetValue("sk-user")
+	m.BaseURLInput.SetValue("https://third.example.com")
+	m.checkAutofillAPIKey()
+	if got := m.APIKeyInput.Value(); got != "sk-user" {
+		t.Fatalf("manual key should be preserved, got %q", got)
+	}
+}
+
+func TestProbeModel_TypingInAPIKeyFieldMarksEdit(t *testing.T) {
+	database, err := db.InitDB(":memory:")
+	if err != nil {
+		t.Fatalf("failed to init memory db: %v", err)
+	}
+	defer database.Close()
+
+	m := NewProbeModel(database)
+
+	// Tab to the API key field and type a character.
+	m, _, _ = m.Update(tea.KeyMsg{Type: tea.KeyTab})
+	if m.FocusIndex != 1 {
+		t.Fatalf("expected focus on API key field after Tab, got %d", m.FocusIndex)
+	}
+	m, _, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'s'}})
+	if !m.APIKeyEdited {
+		t.Fatal("expected APIKeyEdited to be true after typing in the key field")
 	}
 }

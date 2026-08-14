@@ -459,3 +459,82 @@ data: {"response":{"id":"resp-1","output":[],"status":"completed","usage":{"inpu
 		t.Errorf("expected stream to mark Done: true")
 	}
 }
+
+func TestExecuteRequestFallsBackToRootEndpoint(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/v1/chat/completions":
+			w.WriteHeader(http.StatusNotFound)
+			_, _ = w.Write([]byte(`{"error":{"message":"Not Found"}}`))
+		case "/chat/completions":
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"id":"ok","choices":[{"message":{"role":"assistant","content":"hello"}}],"usage":{"prompt_tokens":1,"completion_tokens":2,"total_tokens":3}}`))
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer server.Close()
+
+	// The wizard probes both /v1 and root candidates, so a provider that only
+	// serves at the root must also be reachable from ExecuteTestRequest.
+	res := ExecuteTestRequest(server.URL, "", APITypeOpenAIChat, `{"model":"test","stream":false}`)
+	if res.StatusCode != http.StatusOK {
+		t.Fatalf("expected fallback to root endpoint, got status %d (err=%q)", res.StatusCode, res.Error)
+	}
+	if res.PromptTokens != 1 || res.CompletionTokens != 2 || res.TotalTokens != 3 {
+		t.Fatalf("unexpected token usage after fallback: %+v", res)
+	}
+}
+
+func TestExecuteStreamFallsBackToRootEndpoint(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/v1/chat/completions":
+			w.WriteHeader(http.StatusNotFound)
+			_, _ = w.Write([]byte(`{"error":{"message":"Not Found"}}`))
+		case "/chat/completions":
+			w.Header().Set("Content-Type", "text/event-stream")
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte("data: {\"choices\":[{\"delta\":{\"content\":\"hi\"}}]}\n\ndata: [DONE]\n\n"))
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer server.Close()
+
+	ch := make(chan StreamChunkMsg, 10)
+	go ExecuteStreamRequest(server.URL, "", APITypeOpenAIChat, `{"model":"test","stream":true}`, ch)
+
+	var got200 bool
+	var content strings.Builder
+	var done bool
+	for msg := range ch {
+		if msg.StatusCode == http.StatusOK {
+			got200 = true
+		}
+		content.WriteString(msg.ContentDelta)
+		if msg.Done {
+			done = true
+		}
+	}
+	if !got200 || content.String() != "hi" || !done {
+		t.Fatalf("expected stream fallback to root endpoint (got200=%v content=%q done=%v)", got200, content.String(), done)
+	}
+}
+
+func TestExecuteRequestRejectsUnreachableEndpoint(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+		_, _ = w.Write([]byte(`{"error":{"message":"Not Found"}}`))
+	}))
+	defer server.Close()
+
+	res := ExecuteTestRequest(server.URL, "", APITypeOpenAIChat, `{"model":"test"}`)
+	if res.StatusCode == http.StatusOK {
+		t.Fatalf("expected non-200 status, got %d", res.StatusCode)
+	}
+	if len(res.RawBody) == 0 {
+		t.Fatalf("expected error body to be preserved, got empty RawBody")
+	}
+}

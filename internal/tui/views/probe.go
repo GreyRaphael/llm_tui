@@ -43,6 +43,7 @@ type ProbeModel struct {
 	StatusMsg        string
 	IsError          bool
 	AutofilledKey    bool
+	APIKeyEdited     bool
 }
 
 type modelsFetchedMsg struct {
@@ -271,6 +272,15 @@ func (m ProbeModel) Update(msg tea.Msg) (ProbeModel, tea.Cmd, string) {
 			m.checkAutofillAPIKey()
 		} else {
 			m.APIKeyInput, cmd = m.APIKeyInput.Update(msg)
+			// Any keystroke in the API key field is a manual override; never let
+			// the autofill silently clobber it afterwards.
+			if _, ok := msg.(tea.KeyMsg); ok {
+				m.APIKeyEdited = true
+				if m.AutofilledKey {
+					m.AutofilledKey = false
+					m.StatusMsg = ""
+				}
+			}
 		}
 	case StepFetchingModels, StepProbing:
 		m.Spinner, cmd = m.Spinner.Update(msg)
@@ -316,8 +326,24 @@ func (m *ProbeModel) checkAutofillAPIKey() {
 	if baseURL == "" {
 		return
 	}
+	// Once the user has typed anything into the API key field, respect their
+	// entry and never silently override it with a saved key.
+	if m.APIKeyEdited {
+		return
+	}
+
 	existingKey := m.DB.GetAPIKeyByBaseURL(baseURL)
-	if existingKey != "" && (m.APIKeyInput.Value() == "" || m.AutofilledKey) {
+	if existingKey == "" {
+		// The Base URL changed away from any saved record: don't leave a stale
+		// auto-filled key pointing at a different endpoint.
+		if m.AutofilledKey {
+			m.APIKeyInput.SetValue("")
+			m.AutofilledKey = false
+			m.StatusMsg = ""
+		}
+		return
+	}
+	if !m.AutofilledKey || m.APIKeyInput.Value() == "" {
 		m.APIKeyInput.SetValue(existingKey)
 		m.AutofilledKey = true
 		m.StatusMsg = "🔑 Auto-filled API Key from existing records (press Tab to modify or keep)."

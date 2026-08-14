@@ -16,14 +16,14 @@ const (
 )
 
 type AppModel struct {
-	DB           *db.DB
-	Version      string
-	Screen       Screen
-	ManagerView  views.ManagerModel
-	ProbeView    views.ProbeModel
-	TesterView   views.TesterModel
-	Width        int
-	Height       int
+	DB          *db.DB
+	Version     string
+	Screen      Screen
+	ManagerView views.ManagerModel
+	ProbeView   views.ProbeModel
+	TesterView  views.TesterModel
+	Width       int
+	Height      int
 }
 
 func NewAppModel(database *db.DB, version ...string) AppModel {

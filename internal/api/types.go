@@ -51,4 +51,3 @@ type StreamChunkMsg struct {
 	Err              error         `json:"error,omitempty"`
 	Done             bool          `json:"done"`
 }
-
