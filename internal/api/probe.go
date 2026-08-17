@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"sort"
@@ -22,9 +23,32 @@ func NormalizeURL(baseURL string) string {
 		return ""
 	}
 	if !strings.HasPrefix(u, "http://") && !strings.HasPrefix(u, "https://") {
-		u = "https://" + u
+		host := u
+		if idx := strings.Index(u, "/"); idx != -1 {
+			host = u[:idx]
+		}
+		if h, _, err := net.SplitHostPort(host); err == nil {
+			host = h
+		}
+		host = strings.Trim(host, "[]")
+		if isLocalHost(host) {
+			u = "http://" + u
+		} else {
+			u = "https://" + u
+		}
 	}
 	return u
+}
+
+func isLocalHost(host string) bool {
+	h := strings.ToLower(strings.TrimSpace(host))
+	if h == "localhost" || h == "127.0.0.1" || h == "0.0.0.0" || h == "::1" || strings.HasSuffix(h, ".local") {
+		return true
+	}
+	if strings.HasPrefix(h, "127.") {
+		return true
+	}
+	return false
 }
 
 // BuildEndpointURLs constructs candidate URLs given a base URL and an endpoint path (e.g. "/chat/completions")
@@ -233,20 +257,25 @@ func extractErrorMessage(bodyStr string) string {
 	if err := json.Unmarshal([]byte(bodyStr), &parsed); err == nil {
 		if errObj, ok := parsed["error"].(map[string]interface{}); ok {
 			if msg, ok := errObj["message"].(string); ok && msg != "" {
-				if len(msg) > 40 {
-					return msg[:37] + "..."
-				}
-				return msg
+				return truncateRunes(msg, 40)
 			}
 		}
 		if msg, ok := parsed["error"].(string); ok && msg != "" {
-			if len(msg) > 40 {
-				return msg[:37] + "..."
-			}
-			return msg
+			return truncateRunes(msg, 40)
 		}
 	}
 	return ""
+}
+
+func truncateRunes(s string, maxLen int) string {
+	runes := []rune(s)
+	if len(runes) > maxLen {
+		if maxLen > 3 {
+			return string(runes[:maxLen-3]) + "..."
+		}
+		return string(runes[:maxLen])
+	}
+	return s
 }
 
 // FetchModels tries to query /models or /v1/models to retrieve available model IDs

@@ -10,6 +10,7 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+	"unicode/utf8"
 )
 
 func TestURLNormalization(t *testing.T) {
@@ -19,6 +20,12 @@ func TestURLNormalization(t *testing.T) {
 	}{
 		{"api.openai.com/v1/", "https://api.openai.com/v1"},
 		{"http://localhost:8080/v1", "http://localhost:8080/v1"},
+		{"localhost:11434", "http://localhost:11434"},
+		{"localhost:11434/v1", "http://localhost:11434/v1"},
+		{"127.0.0.1:8000", "http://127.0.0.1:8000"},
+		{"0.0.0.0:8080", "http://0.0.0.0:8080"},
+		{"[::1]:11434", "http://[::1]:11434"},
+		{"ollama.local:11434", "http://ollama.local:11434"},
 		{"  https://api.anthropic.com  ", "https://api.anthropic.com"},
 	}
 
@@ -602,5 +609,37 @@ func TestExecuteStreamRequestCancellationExitsGracefully(t *testing.T) {
 		case <-deadline:
 			t.Fatal("channel not closed after cancellation")
 		}
+	}
+}
+
+func TestExtractErrorMessageRuneTruncation(t *testing.T) {
+	// Chinese message longer than 40 runes
+	chineseMsg := `{"error":{"message":"这是一个包含非常多中文字符的错误信息，用来测试按字符截断是否会导致多字节UTF8乱码"}}`
+	extracted := extractErrorMessage(chineseMsg)
+	if !utf8.ValidString(extracted) {
+		t.Fatalf("extracted string is not valid UTF-8: %q", extracted)
+	}
+	if !strings.HasSuffix(extracted, "...") {
+		t.Fatalf("expected string to end with ..., got %q", extracted)
+	}
+	runes := []rune(extracted)
+	if len(runes) != 40 {
+		t.Fatalf("expected 40 runes, got %d (string: %q)", len(runes), extracted)
+	}
+
+	// Emoji message
+	emojiMsg := `{"error":{"message":"⚠️🔥🚀💡🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉🎉"}}`
+	extractedEmoji := extractErrorMessage(emojiMsg)
+	if !utf8.ValidString(extractedEmoji) {
+		t.Fatalf("extracted emoji string is not valid UTF-8: %q", extractedEmoji)
+	}
+	if !strings.HasSuffix(extractedEmoji, "...") {
+		t.Fatalf("expected emoji string to end with ..., got %q", extractedEmoji)
+	}
+
+	// Short message should not be truncated
+	shortMsg := `{"error":{"message":"API Key is invalid"}}`
+	if got := extractErrorMessage(shortMsg); got != "API Key is invalid" {
+		t.Fatalf("expected untruncated message, got %q", got)
 	}
 }

@@ -756,3 +756,33 @@ func TestTesterModel_RejectsSendWhileExecuting(t *testing.T) {
 		t.Fatal("expected a status hint after rejected send")
 	}
 }
+
+func TestTesterModel_DBUpdateErrorFeedback(t *testing.T) {
+	database, err := db.InitDB(":memory:")
+	if err != nil {
+		t.Fatalf("failed to init memory db: %v", err)
+	}
+
+	rec := db.ProviderRecord{
+		Name:    "Test",
+		BaseURL: "https://api.example.com",
+		APIKey:  "sk-test",
+		APIType: api.APITypeOpenAIChat,
+		Model:   "gpt-4o",
+	}
+	_ = database.CreateRecord(&rec)
+
+	m := NewTesterModel(database, rec)
+	m.DiscoveredModels = []string{"gpt-4o", "gpt-4o-mini"}
+	m.ModelIndex = 1
+	m.SelectingModel = true
+
+	// Close database so next UpdateRecord fails
+	_ = database.Close()
+
+	// Press Enter to switch model with closed DB
+	m, _, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if !strings.Contains(m.CopyStatusMsg, "Failed to save") {
+		t.Fatalf("expected DB failure status message, got: %q", m.CopyStatusMsg)
+	}
+}

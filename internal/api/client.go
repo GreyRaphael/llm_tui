@@ -413,9 +413,9 @@ func ExecuteTestRequest(baseURL, apiKey, apiType, payloadJSON string) *TestResul
 	bodyStr := decodeGBKIfNeeded(bodyBytes)
 	res.RawBody = bodyStr
 
-	// Check if response is a JSON error (e.g., LiteLLM wrapping SSE data in error
-	// message). A present but null "error" key (common in OpenAI Responses
-	// non-stream payloads) must NOT trigger the error path.
+	// Check if response is a JSON error object (including gateways like LiteLLM
+	// returning nested error structures). A present but null "error" key (common
+	// in OpenAI Responses non-stream payloads) must NOT trigger the error path.
 	isErrorJSON := false
 	var genericCheck map[string]interface{}
 	if err := json.Unmarshal([]byte(bodyStr), &genericCheck); err == nil {
@@ -425,11 +425,11 @@ func ExecuteTestRequest(baseURL, apiKey, apiType, payloadJSON string) *TestResul
 	}
 
 	if isErrorJSON {
-		// Unescape nested content for human-readable display instead of trying to parse SSE
+		// Unescape nested error messages for clean, human-readable display
 		readable := unescapeForDisplay(bodyStr)
 		res.FormattedBody = readable
 	} else if isSSEResponse([]byte(bodyStr)) {
-		// If response contains embedded SSE stream logs (e.g. LiteLLM/vLLM error wrapping SSE data), parse and assemble
+		// If response contains raw SSE stream data (e.g. gateway returned stream logs), parse and assemble
 		res.RawBody = assembleSSEResponse([]byte(bodyStr), res)
 		res.FormattedBody = FormatJSON(res.RawBody)
 	} else {

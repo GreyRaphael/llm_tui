@@ -69,6 +69,7 @@ type executeFinishedMsg struct {
 
 type testerModelsFetchedMsg struct {
 	models []string
+	err    error
 }
 
 // streamChunkMsg wraps an api.StreamChunkMsg with the id of the request it
@@ -273,8 +274,11 @@ func (m TesterModel) Update(msg tea.Msg) (TesterModel, tea.Cmd, string) {
 						m.Textarea.SetValue(newTemplate)
 					}
 					m.Record.CustomPayload = m.Textarea.Value()
-					_ = m.DB.UpdateRecord(&m.Record)
-					m.CopyStatusMsg = fmt.Sprintf("Switched model to '%s'", newModel)
+					if err := m.DB.UpdateRecord(&m.Record); err != nil {
+						m.CopyStatusMsg = fmt.Sprintf("⚠️ Failed to save model switch to DB: %v", err)
+					} else {
+						m.CopyStatusMsg = fmt.Sprintf("Switched model to '%s'", newModel)
+					}
 				}
 				m.SelectingModel = false
 				return m, nil, ""
@@ -369,7 +373,9 @@ func (m TesterModel) Update(msg tea.Msg) (TesterModel, tea.Cmd, string) {
 
 			m.Record.CustomPayload = m.Textarea.Value()
 			m.Record.ReasoningEffort = m.ReasoningEffort
-			_ = m.DB.UpdateRecord(&m.Record)
+			if err := m.DB.UpdateRecord(&m.Record); err != nil {
+				m.CopyStatusMsg = fmt.Sprintf("⚠️ Failed to save record to DB: %v", err)
+			}
 
 			// Parse stream property from request payload
 			var payloadMap map[string]interface{}
@@ -609,8 +615,8 @@ func (m TesterModel) runFetchModelsCmd() tea.Cmd {
 	baseURL := m.Record.BaseURL
 	apiKey := m.Record.APIKey
 	return func() tea.Msg {
-		models, _ := api.FetchModels(baseURL, apiKey)
-		return testerModelsFetchedMsg{models: models}
+		models, err := api.FetchModels(baseURL, apiKey)
+		return testerModelsFetchedMsg{models: models, err: err}
 	}
 }
 
