@@ -62,6 +62,10 @@ func (m AppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case tea.KeyMsg:
 		if msg.String() == "ctrl+c" {
+			// Release any in-flight stream before the program exits.
+			if m.Screen == ScreenTester {
+				m.TesterView.CancelStreamRequest()
+			}
 			return m, tea.Quit
 		}
 		if m.Screen == ScreenManager && msg.String() == "q" {

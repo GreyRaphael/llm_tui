@@ -1,6 +1,7 @@
 package views
 
 import (
+	"strings"
 	"testing"
 	"time"
 
@@ -531,6 +532,11 @@ func TestTesterModel_StreamModeDetection(t *testing.T) {
 		t.Errorf("expected IsStreamMode to be false for stream: false payload")
 	}
 
+	// Let the first request finish so a second send is not rejected by the
+	// in-flight guard (Ctrl+S while a request is running is intentionally
+	// ignored).
+	m.IsExecuting = false
+
 	// Test payload with stream: true
 	m.Textarea.SetValue(`{"model":"gpt-4o","stream":true,"messages":[{"role":"user","content":"hi"}]}`)
 	m, _, _ = m.Update(tea.KeyMsg{Type: tea.KeyCtrlS})
@@ -672,5 +678,81 @@ func TestProbeModel_TypingInAPIKeyFieldMarksEdit(t *testing.T) {
 	m, _, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'s'}})
 	if !m.APIKeyEdited {
 		t.Fatal("expected APIKeyEdited to be true after typing in the key field")
+	}
+}
+
+func TestTesterModel_IgnoresStaleStreamChunks(t *testing.T) {
+	database, err := db.InitDB(":memory:")
+	if err != nil {
+		t.Fatalf("failed to init memory db: %v", err)
+	}
+	defer database.Close()
+
+	rec := db.ProviderRecord{
+		Name:    "Test",
+		BaseURL: "https://api.example.com",
+		APIKey:  "sk-test",
+		APIType: api.APITypeOpenAIChat,
+		Model:   "gpt-4o",
+	}
+	m := NewTesterModel(database, rec)
+	m.StreamID = 7 // emulate a current send that reached stream #7
+
+	// A chunk tagged with an old stream id must be ignored entirely: it must
+	// not touch content, executing state, or LastResult.
+	m, _, _ = m.Update(streamChunkMsg{id: 6, msg: api.StreamChunkMsg{ContentDelta: "stale", Done: true}})
+	if m.ContentText != "" {
+		t.Fatalf("expected stale chunk ignored, got %q", m.ContentText)
+	}
+	if m.IsExecuting {
+		t.Fatal("stale Done must not change executing state")
+	}
+	if m.LastResult != nil {
+		t.Fatal("stale Done must not populate LastResult")
+	}
+
+	// A chunk tagged with the current stream id is processed normally.
+	m.IsExecuting = true
+	m, _, _ = m.Update(streamChunkMsg{id: 7, msg: api.StreamChunkMsg{ContentDelta: "fresh", Done: true}})
+	if m.ContentText != "fresh" {
+		t.Fatalf("expected current chunk accepted, got %q", m.ContentText)
+	}
+	if m.IsExecuting {
+		t.Fatal("expected IsExecuting false after current stream done")
+	}
+	if m.LastResult == nil || !strings.Contains(m.LastResult.RawBody, "fresh") {
+		t.Fatalf("expected LastResult built for current stream, got %+v", m.LastResult)
+	}
+}
+
+func TestTesterModel_RejectsSendWhileExecuting(t *testing.T) {
+	database, err := db.InitDB(":memory:")
+	if err != nil {
+		t.Fatalf("failed to init memory db: %v", err)
+	}
+	defer database.Close()
+
+	rec := db.ProviderRecord{
+		Name:    "Test",
+		BaseURL: "https://api.example.com",
+		APIKey:  "sk-test",
+		APIType: api.APITypeOpenAIChat,
+		Model:   "gpt-4o",
+	}
+	m := NewTesterModel(database, rec)
+	m.IsExecuting = true
+	m.StreamID = 3
+
+	// Ctrl+S while a request is running must be rejected: no new stream id is
+	// allocated, executing state is preserved, and the user gets a hint.
+	m, _, _ = m.Update(tea.KeyMsg{Type: tea.KeyCtrlS})
+	if !m.IsExecuting {
+		t.Fatal("IsExecuting must stay true when a send is rejected")
+	}
+	if m.StreamID != 3 {
+		t.Fatalf("rejected send must not allocate a new stream id, got %d", m.StreamID)
+	}
+	if m.CopyStatusMsg == "" {
+		t.Fatal("expected a status hint after rejected send")
 	}
 }

@@ -1,12 +1,15 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 )
 
 func TestURLNormalization(t *testing.T) {
@@ -348,7 +351,7 @@ data: [DONE]`
 	defer server.Close()
 
 	ch := make(chan StreamChunkMsg, 50)
-	go ExecuteStreamRequest(server.URL, "sk-test", APITypeOpenAIChat, `{"model":"deepseek-reasoner","stream":true}`, ch)
+	go ExecuteStreamRequest(context.Background(), server.URL, "sk-test", APITypeOpenAIChat, `{"model":"deepseek-reasoner","stream":true}`, ch)
 
 	var fullContent strings.Builder
 	var fullReasoning strings.Builder
@@ -418,7 +421,7 @@ data: {"response":{"id":"resp-1","output":[],"status":"completed","usage":{"inpu
 	defer server.Close()
 
 	ch := make(chan StreamChunkMsg, 50)
-	go ExecuteStreamRequest(server.URL, "", APITypeOpenAIResponses, `{"model":"deepseek-v4-flash","stream":true}`, ch)
+	go ExecuteStreamRequest(context.Background(), server.URL, "", APITypeOpenAIResponses, `{"model":"deepseek-v4-flash","stream":true}`, ch)
 
 	var fullContent strings.Builder
 	var fullReasoning strings.Builder
@@ -504,7 +507,7 @@ func TestExecuteStreamFallsBackToRootEndpoint(t *testing.T) {
 	defer server.Close()
 
 	ch := make(chan StreamChunkMsg, 10)
-	go ExecuteStreamRequest(server.URL, "", APITypeOpenAIChat, `{"model":"test","stream":true}`, ch)
+	go ExecuteStreamRequest(context.Background(), server.URL, "", APITypeOpenAIChat, `{"model":"test","stream":true}`, ch)
 
 	var got200 bool
 	var content strings.Builder
@@ -536,5 +539,68 @@ func TestExecuteRequestRejectsUnreachableEndpoint(t *testing.T) {
 	}
 	if len(res.RawBody) == 0 {
 		t.Fatalf("expected error body to be preserved, got empty RawBody")
+	}
+}
+
+func TestExecuteStreamRequestCancellationExitsGracefully(t *testing.T) {
+	// A server that streams chunks indefinitely, combined with a tiny channel
+	// buffer and a cancelled context: the goroutine must exit (and close the
+	// channel) instead of leaking while blocked on a full channel.
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(http.StatusOK)
+		fl, ok := w.(http.Flusher)
+		if !ok {
+			return
+		}
+		// Stop writing once the client is gone so server.Close() returns.
+		ticker := time.NewTicker(5 * time.Millisecond)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-r.Context().Done():
+				return
+			case <-ticker.C:
+				fmt.Fprintf(w, "data: {\"choices\":[{\"delta\":{\"content\":\"x\"}}]}\n\n")
+				fl.Flush()
+			}
+		}
+	}))
+	defer server.Close()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	ch := make(chan StreamChunkMsg, 2) // small buffer fills quickly
+	exited := make(chan struct{})
+	go func() {
+		ExecuteStreamRequest(ctx, server.URL, "", APITypeOpenAIChat, `{"model":"test","stream":true}`, ch)
+		close(exited)
+	}()
+
+	// Read at least one chunk, then cancel while the buffer is filling.
+	select {
+	case <-ch:
+	case <-time.After(5 * time.Second):
+		t.Fatal("stream produced no chunk")
+	}
+	cancel()
+
+	select {
+	case <-exited:
+	case <-time.After(5 * time.Second):
+		t.Fatal("stream goroutine did not exit after cancellation (leak)")
+	}
+
+	// The deferred close must have run: the channel must be drained to closed
+	// without blocking.
+	deadline := time.After(2 * time.Second)
+	for {
+		select {
+		case _, ok := <-ch:
+			if !ok {
+				return // channel closed: goroutine fully cleaned up
+			}
+		case <-deadline:
+			t.Fatal("channel not closed after cancellation")
+		}
 	}
 }

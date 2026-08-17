@@ -1,6 +1,7 @@
 package views
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"strings"
@@ -27,23 +28,30 @@ const (
 )
 
 type TesterModel struct {
-	DB                     *db.DB
-	Record                 db.ProviderRecord
-	ReasoningEffort        string
-	Textarea               textarea.Model
-	Viewport               viewport.Model
-	Spinner                spinner.Model
-	ActivePane             ActivePane
-	IsExecuting            bool
-	IsStreamMode           bool
-	SelectingModel         bool
-	DiscoveredModels       []string
-	ModelIndex             int
-	LastResult             *api.TestResult
-	CopyStatusMsg          string
-	Width                  int
-	Height                 int
-	StreamChan             chan api.StreamChunkMsg
+	DB               *db.DB
+	Record           db.ProviderRecord
+	ReasoningEffort  string
+	Textarea         textarea.Model
+	Viewport         viewport.Model
+	Spinner          spinner.Model
+	ActivePane       ActivePane
+	IsExecuting      bool
+	IsStreamMode     bool
+	SelectingModel   bool
+	DiscoveredModels []string
+	ModelIndex       int
+	LastResult       *api.TestResult
+	CopyStatusMsg    string
+	Width            int
+	Height           int
+	StreamChan       chan api.StreamChunkMsg
+	// StreamID is bumped on every stream request send; each streamed chunk is
+	// tagged with the id of the request it belongs to so stale chunks from a
+	// superseded request are dropped instead of polluting the current stream.
+	StreamID int
+	// CancelStream cancels the in-flight stream request so its goroutine and
+	// HTTP connection are released when the user navigates away or quits.
+	CancelStream           context.CancelFunc
 	ReasoningText          string
 	ContentText            string
 	StreamStatusCode       int
@@ -61,6 +69,15 @@ type executeFinishedMsg struct {
 
 type testerModelsFetchedMsg struct {
 	models []string
+}
+
+// streamChunkMsg wraps an api.StreamChunkMsg with the id of the request it
+// belongs to. Because bubbletea cannot cancel an already-running command goroutine
+// (which may be blocked reading an old channel), a stale chunk can be delivered
+// after a new request starts; the id lets the model drop it.
+type streamChunkMsg struct {
+	id  int
+	msg api.StreamChunkMsg
 }
 
 func renderMarkdown(text string, width int) string {
@@ -200,143 +217,19 @@ func (m TesterModel) Update(msg tea.Msg) (TesterModel, tea.Cmd, string) {
 		m.CopyStatusMsg = ""
 		return m, nil, ""
 
-	case api.StreamChunkMsg:
-		if msg.StatusCode != 0 {
-			m.StreamStatusCode = msg.StatusCode
-		}
-		if msg.Latency != 0 {
-			m.StreamLatency = msg.Latency
-		}
-		if msg.PromptTokens > 0 {
-			m.StreamPromptTokens = msg.PromptTokens
-		}
-		if msg.CompletionTokens > 0 {
-			m.StreamCompletionTokens = msg.CompletionTokens
-		}
-		if msg.TotalTokens > 0 {
-			m.StreamTotalTokens = msg.TotalTokens
-		}
-		if msg.Err != nil {
-			m.StreamError = msg.Err.Error()
-		}
-
-		if msg.ReasoningDelta != "" {
-			m.ReasoningText += msg.ReasoningDelta
-		}
-		if msg.ContentDelta != "" {
-			m.ContentText += msg.ContentDelta
-		}
-
-		reasoningText := m.ReasoningText
-		contentText := m.ContentText
-
-		var formattedContent string
-		if reasoningText != "" {
-			var rBuilder strings.Builder
-			rBuilder.WriteString(styles.BadgeAccentStyle.Render("💭 Thinking Process") + "\n")
-			rBuilder.WriteString(styles.HelpStyle.Render("-------------------") + "\n")
-
-			if msg.Done {
-				renderedReasoning := renderMarkdown(reasoningText, m.Viewport.Width)
-				if renderedReasoning != "" {
-					rBuilder.WriteString(renderedReasoning + "\n\n")
-				} else {
-					rBuilder.WriteString(reasoningText + "\n\n")
-				}
-			} else {
-				rBuilder.WriteString(reasoningText + "\n\n")
-			}
-
-			rBuilder.WriteString(styles.BadgeSuccessStyle.Render("💬 Response Content") + "\n")
-			rBuilder.WriteString(styles.HelpStyle.Render("-------------------") + "\n")
-
-			if msg.Done {
-				renderedContent := renderMarkdown(contentText, m.Viewport.Width)
-				if renderedContent != "" {
-					rBuilder.WriteString(renderedContent)
-				} else {
-					rBuilder.WriteString(contentText)
-				}
-			} else {
-				rBuilder.WriteString(contentText)
-			}
-			formattedContent = rBuilder.String()
-		} else if contentText != "" {
-			if json.Valid([]byte(contentText)) {
-				formattedContent = api.FormatJSON(contentText)
-			} else {
-				if msg.Done {
-					renderedContent := renderMarkdown(contentText, m.Viewport.Width)
-					if renderedContent != "" {
-						formattedContent = renderedContent
-					} else {
-						formattedContent = contentText
-					}
-				} else {
-					formattedContent = contentText
-				}
-			}
-		} else if m.StreamError != "" {
-			formattedContent = styles.ErrorStyle.Render("Error: " + m.StreamError)
-		}
-
-		m.setViewportContent(formattedContent)
-		if m.IsExecuting {
-			m.Viewport.GotoBottom()
-		}
-
-		if msg.Done {
-			m.IsExecuting = false
-			m.StreamChan = nil
-
-			var assembledJSON string
-			if reasoningText != "" || contentText != "" {
-				assembledMap := map[string]interface{}{
-					"model": m.Record.Model,
-					"choices": []map[string]interface{}{
-						{
-							"index": 0,
-							"message": map[string]interface{}{
-								"role":              "assistant",
-								"content":           contentText,
-								"reasoning_content": reasoningText,
-							},
-							"finish_reason": "stop",
-						},
-					},
-					"usage": map[string]int{
-						"prompt_tokens":     m.StreamPromptTokens,
-						"completion_tokens": m.StreamCompletionTokens,
-						"total_tokens":      m.StreamTotalTokens,
-					},
-				}
-				buf, err := json.Marshal(assembledMap)
-				if err == nil {
-					assembledJSON = string(buf)
-				} else {
-					assembledJSON = contentText
-				}
-			} else if m.StreamError != "" {
-				assembledJSON = fmt.Sprintf(`{"error": %q}`, m.StreamError)
-			}
-
-			m.LastResult = &api.TestResult{
-				StatusCode:       m.StreamStatusCode,
-				Latency:          m.StreamLatency,
-				PromptTokens:     m.StreamPromptTokens,
-				CompletionTokens: m.StreamCompletionTokens,
-				TotalTokens:      m.StreamTotalTokens,
-				RawBody:          assembledJSON,
-				FormattedBody:    api.FormatJSON(assembledJSON),
-				Error:            m.StreamError,
-			}
-			m.CopyStatusMsg = ""
-
-			m.setViewportContent(formattedContent)
+	case streamChunkMsg:
+		if msg.id != m.StreamID {
+			// A chunk from a superseded request can still be delivered because
+			// bubbletea cannot cancel a command goroutine already blocked on an
+			// old channel — drop it so it cannot pollute the current stream.
 			return m, nil, ""
 		}
+		return m.handleStreamChunk(msg.msg)
 
-		return m, waitForStreamChunkCmd(m.StreamChan), ""
+	case api.StreamChunkMsg:
+		// Legacy direct entry point (also used by unit tests); it is treated as
+		// belonging to the current stream.
+		return m.handleStreamChunk(msg)
 
 	case tea.KeyMsg:
 		if m.SelectingModel {
@@ -391,6 +284,9 @@ func (m TesterModel) Update(msg tea.Msg) (TesterModel, tea.Cmd, string) {
 
 		switch msg.String() {
 		case "esc":
+			// Cancel any in-flight stream before leaving so its goroutine and
+			// HTTP connection do not leak while the user is on another screen.
+			m.CancelStreamRequest()
 			action = "back_to_manager"
 			return m, nil, action
 
@@ -450,6 +346,14 @@ func (m TesterModel) Update(msg tea.Msg) (TesterModel, tea.Cmd, string) {
 			}
 
 		case "ctrl+s", "ctrl+r":
+			// Guard against a second send while a request is already running:
+			// instead of stacking concurrent streams (and risking stale chunks
+			// bleeding into the new response), reject it with a hint.
+			if m.IsExecuting {
+				m.CopyStatusMsg = "⏳ A request is already running — wait for it to finish or press Esc."
+				return m, nil, ""
+			}
+			m.CancelStreamRequest()
 			m.IsExecuting = true
 			m.CopyStatusMsg = ""
 			m.ReasoningText = ""
@@ -558,6 +462,149 @@ func (m TesterModel) Update(msg tea.Msg) (TesterModel, tea.Cmd, string) {
 	return m, cmd, action
 }
 
+// handleStreamChunk applies a single streamed chunk from the current request to
+// the model, re-renders the response viewport, and either schedules the next
+// chunk read (StreamID-tagged) or finalizes the result when the stream is done.
+func (m TesterModel) handleStreamChunk(msg api.StreamChunkMsg) (TesterModel, tea.Cmd, string) {
+	if msg.StatusCode != 0 {
+		m.StreamStatusCode = msg.StatusCode
+	}
+	if msg.Latency != 0 {
+		m.StreamLatency = msg.Latency
+	}
+	if msg.PromptTokens > 0 {
+		m.StreamPromptTokens = msg.PromptTokens
+	}
+	if msg.CompletionTokens > 0 {
+		m.StreamCompletionTokens = msg.CompletionTokens
+	}
+	if msg.TotalTokens > 0 {
+		m.StreamTotalTokens = msg.TotalTokens
+	}
+	if msg.Err != nil {
+		m.StreamError = msg.Err.Error()
+	}
+
+	if msg.ReasoningDelta != "" {
+		m.ReasoningText += msg.ReasoningDelta
+	}
+	if msg.ContentDelta != "" {
+		m.ContentText += msg.ContentDelta
+	}
+
+	reasoningText := m.ReasoningText
+	contentText := m.ContentText
+
+	var formattedContent string
+	if reasoningText != "" {
+		var rBuilder strings.Builder
+		rBuilder.WriteString(styles.BadgeAccentStyle.Render("💭 Thinking Process") + "\n")
+		rBuilder.WriteString(styles.HelpStyle.Render("-------------------") + "\n")
+
+		if msg.Done {
+			renderedReasoning := renderMarkdown(reasoningText, m.Viewport.Width)
+			if renderedReasoning != "" {
+				rBuilder.WriteString(renderedReasoning + "\n\n")
+			} else {
+				rBuilder.WriteString(reasoningText + "\n\n")
+			}
+		} else {
+			rBuilder.WriteString(reasoningText + "\n\n")
+		}
+
+		rBuilder.WriteString(styles.BadgeSuccessStyle.Render("💬 Response Content") + "\n")
+		rBuilder.WriteString(styles.HelpStyle.Render("-------------------") + "\n")
+
+		if msg.Done {
+			renderedContent := renderMarkdown(contentText, m.Viewport.Width)
+			if renderedContent != "" {
+				rBuilder.WriteString(renderedContent)
+			} else {
+				rBuilder.WriteString(contentText)
+			}
+		} else {
+			rBuilder.WriteString(contentText)
+		}
+		formattedContent = rBuilder.String()
+	} else if contentText != "" {
+		if json.Valid([]byte(contentText)) {
+			formattedContent = api.FormatJSON(contentText)
+		} else {
+			if msg.Done {
+				renderedContent := renderMarkdown(contentText, m.Viewport.Width)
+				if renderedContent != "" {
+					formattedContent = renderedContent
+				} else {
+					formattedContent = contentText
+				}
+			} else {
+				formattedContent = contentText
+			}
+		}
+	} else if m.StreamError != "" {
+		formattedContent = styles.ErrorStyle.Render("Error: " + m.StreamError)
+	}
+
+	m.setViewportContent(formattedContent)
+	if m.IsExecuting {
+		m.Viewport.GotoBottom()
+	}
+
+	if msg.Done {
+		m.IsExecuting = false
+		m.StreamChan = nil
+		m.CancelStreamRequest()
+
+		var assembledJSON string
+		if reasoningText != "" || contentText != "" {
+			assembledMap := map[string]interface{}{
+				"model": m.Record.Model,
+				"choices": []map[string]interface{}{
+					{
+						"index": 0,
+						"message": map[string]interface{}{
+							"role":              "assistant",
+							"content":           contentText,
+							"reasoning_content": reasoningText,
+						},
+						"finish_reason": "stop",
+					},
+				},
+				"usage": map[string]int{
+					"prompt_tokens":     m.StreamPromptTokens,
+					"completion_tokens": m.StreamCompletionTokens,
+					"total_tokens":      m.StreamTotalTokens,
+				},
+			}
+			buf, err := json.Marshal(assembledMap)
+			if err == nil {
+				assembledJSON = string(buf)
+			} else {
+				assembledJSON = contentText
+			}
+		} else if m.StreamError != "" {
+			assembledJSON = fmt.Sprintf(`{"error": %q}`, m.StreamError)
+		}
+
+		m.LastResult = &api.TestResult{
+			StatusCode:       m.StreamStatusCode,
+			Latency:          m.StreamLatency,
+			PromptTokens:     m.StreamPromptTokens,
+			CompletionTokens: m.StreamCompletionTokens,
+			TotalTokens:      m.StreamTotalTokens,
+			RawBody:          assembledJSON,
+			FormattedBody:    api.FormatJSON(assembledJSON),
+			Error:            m.StreamError,
+		}
+		m.CopyStatusMsg = ""
+
+		m.setViewportContent(formattedContent)
+		return m, nil, ""
+	}
+
+	return m, waitForStreamChunkCmd(m.StreamID, m.StreamChan), ""
+}
+
 func (m TesterModel) runFetchModelsCmd() tea.Cmd {
 	baseURL := m.Record.BaseURL
 	apiKey := m.Record.APIKey
@@ -580,26 +627,42 @@ func (m TesterModel) runExecuteNonStreamCmd() tea.Cmd {
 }
 
 func (m *TesterModel) runExecuteStreamCmd() (tea.Cmd, chan api.StreamChunkMsg) {
+	// Every send gets a fresh id (and context) so that a stream superseded by a
+	// new request can be cancelled and its late chunks dropped by id.
+	m.StreamID++
+	ctx, cancel := context.WithCancel(context.Background())
+	m.CancelStream = cancel
+
 	baseURL := m.Record.BaseURL
 	apiKey := m.Record.APIKey
 	apiType := m.Record.APIType
 	payload := m.Textarea.Value()
 
 	ch := make(chan api.StreamChunkMsg, 100)
-	go api.ExecuteStreamRequest(baseURL, apiKey, apiType, payload, ch)
-	return waitForStreamChunkCmd(ch), ch
+	go api.ExecuteStreamRequest(ctx, baseURL, apiKey, apiType, payload, ch)
+	return waitForStreamChunkCmd(m.StreamID, ch), ch
 }
 
-func waitForStreamChunkCmd(ch chan api.StreamChunkMsg) tea.Cmd {
+// CancelStreamRequest cancels the in-flight stream (if any) so its goroutine and
+// HTTP connection are released promptly when the user navigates away or quits,
+// instead of leaking until the hard timeout expires.
+func (m *TesterModel) CancelStreamRequest() {
+	if m.CancelStream != nil {
+		m.CancelStream()
+		m.CancelStream = nil
+	}
+}
+
+func waitForStreamChunkCmd(id int, ch chan api.StreamChunkMsg) tea.Cmd {
 	return func() tea.Msg {
 		if ch == nil {
-			return api.StreamChunkMsg{Done: true}
+			return streamChunkMsg{id: id, msg: api.StreamChunkMsg{Done: true}}
 		}
 		msg, ok := <-ch
 		if !ok {
-			return api.StreamChunkMsg{Done: true}
+			return streamChunkMsg{id: id, msg: api.StreamChunkMsg{Done: true}}
 		}
-		return msg
+		return streamChunkMsg{id: id, msg: msg}
 	}
 }
 

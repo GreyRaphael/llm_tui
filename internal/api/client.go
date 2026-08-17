@@ -71,13 +71,19 @@ func doPostWithFallback(ctx context.Context, client *http.Client, urls []string,
 	return nil, lastErr
 }
 
-// ExecuteStreamRequest dispatches the test payload to target API endpoint and streams chunks over msgChan
-func ExecuteStreamRequest(baseURL, apiKey, apiType, payloadJSON string, msgChan chan<- StreamChunkMsg) {
+// ExecuteStreamRequest dispatches the test payload to target API endpoint and streams chunks over msgChan.
+// The caller-supplied ctx lets the TUI cancel an in-flight stream (e.g. when the user navigates away or
+// starts a new request); cancellation makes the goroutine exit promptly instead of leaking on a full channel.
+// A hard 120s cap is applied on top of the caller's context as a safety net.
+func ExecuteStreamRequest(ctx context.Context, baseURL, apiKey, apiType, payloadJSON string, msgChan chan<- StreamChunkMsg) {
 	defer close(msgChan)
+
+	ctx, cancel := context.WithTimeout(ctx, 120*time.Second)
+	defer cancel()
 
 	norm := NormalizeURL(baseURL)
 	if norm == "" {
-		msgChan <- StreamChunkMsg{Err: fmt.Errorf("Invalid Base URL"), Done: true}
+		sendChunk(ctx, msgChan, StreamChunkMsg{Err: fmt.Errorf("Invalid Base URL"), Done: true})
 		return
 	}
 
@@ -93,12 +99,9 @@ func ExecuteStreamRequest(baseURL, apiKey, apiType, payloadJSON string, msgChan 
 
 	urls := BuildEndpointURLs(norm, endpointPath)
 	if len(urls) == 0 {
-		msgChan <- StreamChunkMsg{Err: fmt.Errorf("Failed to construct endpoint URL"), Done: true}
+		sendChunk(ctx, msgChan, StreamChunkMsg{Err: fmt.Errorf("Failed to construct endpoint URL"), Done: true})
 		return
 	}
-
-	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
-	defer cancel()
 
 	client := &http.Client{}
 	startTime := time.Now()
@@ -109,7 +112,7 @@ func ExecuteStreamRequest(baseURL, apiKey, apiType, payloadJSON string, msgChan 
 		if err == nil {
 			err = fmt.Errorf("no reachable endpoint")
 		}
-		msgChan <- StreamChunkMsg{Err: fmt.Errorf("HTTP execution error: %v", err), Latency: initialLatency, Done: true}
+		sendChunk(ctx, msgChan, StreamChunkMsg{Err: fmt.Errorf("HTTP execution error: %v", err), Latency: initialLatency, Done: true})
 		return
 	}
 	defer resp.Body.Close()
@@ -121,19 +124,21 @@ func ExecuteStreamRequest(baseURL, apiKey, apiType, payloadJSON string, msgChan 
 		if errSnippet == "" {
 			errSnippet = bodyStr
 		}
-		msgChan <- StreamChunkMsg{
+		sendChunk(ctx, msgChan, StreamChunkMsg{
 			StatusCode: resp.StatusCode,
 			Latency:    time.Since(startTime),
 			Err:        fmt.Errorf("HTTP %d: %s", resp.StatusCode, errSnippet),
 			Done:       true,
-		}
+		})
 		return
 	}
 
 	// Send initial HTTP status msg
-	msgChan <- StreamChunkMsg{
+	if !sendChunk(ctx, msgChan, StreamChunkMsg{
 		StatusCode: resp.StatusCode,
 		Latency:    initialLatency,
+	}) {
+		return
 	}
 
 	contentType := resp.Header.Get("Content-Type")
@@ -147,6 +152,9 @@ func ExecuteStreamRequest(baseURL, apiKey, apiType, payloadJSON string, msgChan 
 	var fullBodyBuilder strings.Builder
 
 	for scanner.Scan() {
+		if ctx.Err() != nil {
+			return
+		}
 		lineBytes := scanner.Bytes()
 		lineStr := decodeGBKIfNeeded(lineBytes)
 		fullBodyBuilder.WriteString(lineStr)
@@ -160,12 +168,14 @@ func ExecuteStreamRequest(baseURL, apiKey, apiType, payloadJSON string, msgChan 
 					res := &TestResult{}
 					extractTokenUsage([]byte(trimmed), res)
 					content, reasoning := extractContentAndReasoningFromJSON(generic)
-					msgChan <- StreamChunkMsg{
+					if !sendChunk(ctx, msgChan, StreamChunkMsg{
 						ContentDelta:     content,
 						ReasoningDelta:   reasoning,
 						PromptTokens:     res.PromptTokens,
 						CompletionTokens: res.CompletionTokens,
 						TotalTokens:      res.TotalTokens,
+					}) {
+						return
 					}
 				}
 			}
@@ -265,27 +275,46 @@ func ExecuteStreamRequest(baseURL, apiKey, apiType, payloadJSON string, msgChan 
 		}
 
 		if contentDelta != "" || reasoningDelta != "" || promptTokens > 0 || completionTokens > 0 {
-			msgChan <- StreamChunkMsg{
+			if !sendChunk(ctx, msgChan, StreamChunkMsg{
 				ContentDelta:     contentDelta,
 				ReasoningDelta:   reasoningDelta,
 				PromptTokens:     promptTokens,
 				CompletionTokens: completionTokens,
 				TotalTokens:      totalTokens,
 				Latency:          time.Since(startTime),
+			}) {
+				return
 			}
 		}
 	}
 
 	if err := scanner.Err(); err != nil && err != io.EOF {
-		msgChan <- StreamChunkMsg{Err: fmt.Errorf("Stream scanner error: %v", err)}
+		if !sendChunk(ctx, msgChan, StreamChunkMsg{Err: fmt.Errorf("Stream scanner error: %v", err), Done: true}) {
+			return
+		}
 	}
 
-	msgChan <- StreamChunkMsg{
+	if !sendChunk(ctx, msgChan, StreamChunkMsg{
 		Done:             true,
 		Latency:          time.Since(startTime),
 		PromptTokens:     promptTokens,
 		CompletionTokens: completionTokens,
 		TotalTokens:      totalTokens,
+	}) {
+		return
+	}
+}
+
+// sendChunk delivers a chunk to the TUI without ever blocking forever: once the
+// context is cancelled (e.g. the user navigated away and stopped reading the
+// channel, or a new request superseded this one) it drops the message and returns
+// false so the goroutine can exit instead of leaking on a full channel.
+func sendChunk(ctx context.Context, ch chan<- StreamChunkMsg, msg StreamChunkMsg) bool {
+	select {
+	case ch <- msg:
+		return true
+	case <-ctx.Done():
+		return false
 	}
 }
 
