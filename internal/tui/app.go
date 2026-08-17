@@ -51,8 +51,7 @@ func (m AppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		m.Width = msg.Width
 		m.Height = msg.Height
-		m.ManagerView.Width = msg.Width
-		m.ManagerView.Height = msg.Height
+		m.ManagerView.Resize(msg.Width, msg.Height)
 		switch m.Screen {
 		case ScreenProbe:
 			m.ProbeView.Resize(msg.Width, msg.Height)
@@ -106,12 +105,18 @@ func (m AppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "back_to_manager":
 			m.Screen = ScreenManager
 			m.ManagerView.RefreshRecords()
+			if m.Width > 0 && m.Height > 0 {
+				m.ManagerView.Resize(m.Width, m.Height)
+			}
 			return m, nil
 		case "record_created":
 			m.Screen = ScreenManager
 			m.ManagerView.RefreshRecords()
 			m.ManagerView.StatusMsg = "Provider record created and saved to SQLite!"
 			m.ManagerView.IsError = false
+			if m.Width > 0 && m.Height > 0 {
+				m.ManagerView.Resize(m.Width, m.Height)
+			}
 			return m, nil
 		}
 
@@ -122,6 +127,9 @@ func (m AppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "back_to_manager":
 			m.Screen = ScreenManager
 			m.ManagerView.RefreshRecords()
+			if m.Width > 0 && m.Height > 0 {
+				m.ManagerView.Resize(m.Width, m.Height)
+			}
 			return m, nil
 		}
 	}

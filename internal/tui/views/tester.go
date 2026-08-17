@@ -61,6 +61,7 @@ type TesterModel struct {
 	StreamTotalTokens      int
 	StreamError            string
 	LastRawViewportContent string
+	LastStreamRender       time.Time
 }
 
 type executeFinishedMsg struct {
@@ -369,6 +370,7 @@ func (m TesterModel) Update(msg tea.Msg) (TesterModel, tea.Cmd, string) {
 			m.StreamTotalTokens = 0
 			m.StreamError = ""
 			m.LastResult = nil
+			m.LastStreamRender = time.Time{}
 			m.setViewportContent("")
 
 			m.Record.CustomPayload = m.Textarea.Value()
@@ -469,8 +471,8 @@ func (m TesterModel) Update(msg tea.Msg) (TesterModel, tea.Cmd, string) {
 }
 
 // handleStreamChunk applies a single streamed chunk from the current request to
-// the model, re-renders the response viewport, and either schedules the next
-// chunk read (StreamID-tagged) or finalizes the result when the stream is done.
+// the model, re-renders the response viewport (throttled at ~30 FPS during streaming),
+// and either schedules the next chunk read (StreamID-tagged) or finalizes the result when done.
 func (m TesterModel) handleStreamChunk(msg api.StreamChunkMsg) (TesterModel, tea.Cmd, string) {
 	if msg.StatusCode != 0 {
 		m.StreamStatusCode = msg.StatusCode
@@ -498,6 +500,42 @@ func (m TesterModel) handleStreamChunk(msg api.StreamChunkMsg) (TesterModel, tea
 		m.ContentText += msg.ContentDelta
 	}
 
+	// When stream is still in progress, throttle viewport reflow & repainting to ~30 FPS (~33ms)
+	// and use lightweight text layout without expensive markdown formatting.
+	if !msg.Done {
+		shouldRender := m.LastStreamRender.IsZero() || time.Since(m.LastStreamRender) >= 33*time.Millisecond
+		if shouldRender {
+			var formattedContent string
+			if m.ReasoningText != "" {
+				var rBuilder strings.Builder
+				rBuilder.WriteString(styles.BadgeAccentStyle.Render("💭 Thinking Process") + "\n")
+				rBuilder.WriteString(styles.HelpStyle.Render("-------------------") + "\n")
+				rBuilder.WriteString(m.ReasoningText + "\n\n")
+				rBuilder.WriteString(styles.BadgeSuccessStyle.Render("💬 Response Content") + "\n")
+				rBuilder.WriteString(styles.HelpStyle.Render("-------------------") + "\n")
+				rBuilder.WriteString(m.ContentText)
+				formattedContent = rBuilder.String()
+			} else if m.ContentText != "" {
+				formattedContent = m.ContentText
+			} else if m.StreamError != "" {
+				formattedContent = styles.ErrorStyle.Render("Error: " + m.StreamError)
+			}
+
+			m.setViewportContent(formattedContent)
+			if m.IsExecuting {
+				m.Viewport.GotoBottom()
+			}
+			m.LastStreamRender = time.Now()
+		}
+
+		return m, waitForStreamChunkCmd(m.StreamID, m.StreamChan), ""
+	}
+
+	// Stream is complete (msg.Done == true): perform final high-quality formatting & markdown rendering.
+	m.IsExecuting = false
+	m.StreamChan = nil
+	m.CancelStreamRequest()
+
 	reasoningText := m.ReasoningText
 	contentText := m.ContentText
 
@@ -507,13 +545,9 @@ func (m TesterModel) handleStreamChunk(msg api.StreamChunkMsg) (TesterModel, tea
 		rBuilder.WriteString(styles.BadgeAccentStyle.Render("💭 Thinking Process") + "\n")
 		rBuilder.WriteString(styles.HelpStyle.Render("-------------------") + "\n")
 
-		if msg.Done {
-			renderedReasoning := renderMarkdown(reasoningText, m.Viewport.Width)
-			if renderedReasoning != "" {
-				rBuilder.WriteString(renderedReasoning + "\n\n")
-			} else {
-				rBuilder.WriteString(reasoningText + "\n\n")
-			}
+		renderedReasoning := renderMarkdown(reasoningText, m.Viewport.Width)
+		if renderedReasoning != "" {
+			rBuilder.WriteString(renderedReasoning + "\n\n")
 		} else {
 			rBuilder.WriteString(reasoningText + "\n\n")
 		}
@@ -521,13 +555,9 @@ func (m TesterModel) handleStreamChunk(msg api.StreamChunkMsg) (TesterModel, tea
 		rBuilder.WriteString(styles.BadgeSuccessStyle.Render("💬 Response Content") + "\n")
 		rBuilder.WriteString(styles.HelpStyle.Render("-------------------") + "\n")
 
-		if msg.Done {
-			renderedContent := renderMarkdown(contentText, m.Viewport.Width)
-			if renderedContent != "" {
-				rBuilder.WriteString(renderedContent)
-			} else {
-				rBuilder.WriteString(contentText)
-			}
+		renderedContent := renderMarkdown(contentText, m.Viewport.Width)
+		if renderedContent != "" {
+			rBuilder.WriteString(renderedContent)
 		} else {
 			rBuilder.WriteString(contentText)
 		}
@@ -536,13 +566,9 @@ func (m TesterModel) handleStreamChunk(msg api.StreamChunkMsg) (TesterModel, tea
 		if json.Valid([]byte(contentText)) {
 			formattedContent = api.FormatJSON(contentText)
 		} else {
-			if msg.Done {
-				renderedContent := renderMarkdown(contentText, m.Viewport.Width)
-				if renderedContent != "" {
-					formattedContent = renderedContent
-				} else {
-					formattedContent = contentText
-				}
+			renderedContent := renderMarkdown(contentText, m.Viewport.Width)
+			if renderedContent != "" {
+				formattedContent = renderedContent
 			} else {
 				formattedContent = contentText
 			}
@@ -551,64 +577,52 @@ func (m TesterModel) handleStreamChunk(msg api.StreamChunkMsg) (TesterModel, tea
 		formattedContent = styles.ErrorStyle.Render("Error: " + m.StreamError)
 	}
 
-	m.setViewportContent(formattedContent)
-	if m.IsExecuting {
-		m.Viewport.GotoBottom()
-	}
-
-	if msg.Done {
-		m.IsExecuting = false
-		m.StreamChan = nil
-		m.CancelStreamRequest()
-
-		var assembledJSON string
-		if reasoningText != "" || contentText != "" {
-			assembledMap := map[string]interface{}{
-				"model": m.Record.Model,
-				"choices": []map[string]interface{}{
-					{
-						"index": 0,
-						"message": map[string]interface{}{
-							"role":              "assistant",
-							"content":           contentText,
-							"reasoning_content": reasoningText,
-						},
-						"finish_reason": "stop",
+	var assembledJSON string
+	if reasoningText != "" || contentText != "" {
+		assembledMap := map[string]interface{}{
+			"model": m.Record.Model,
+			"choices": []map[string]interface{}{
+				{
+					"index": 0,
+					"message": map[string]interface{}{
+						"role":              "assistant",
+						"content":           contentText,
+						"reasoning_content": reasoningText,
 					},
+					"finish_reason": "stop",
 				},
-				"usage": map[string]int{
-					"prompt_tokens":     m.StreamPromptTokens,
-					"completion_tokens": m.StreamCompletionTokens,
-					"total_tokens":      m.StreamTotalTokens,
-				},
-			}
-			buf, err := json.Marshal(assembledMap)
-			if err == nil {
-				assembledJSON = string(buf)
-			} else {
-				assembledJSON = contentText
-			}
-		} else if m.StreamError != "" {
-			assembledJSON = fmt.Sprintf(`{"error": %q}`, m.StreamError)
+			},
+			"usage": map[string]int{
+				"prompt_tokens":     m.StreamPromptTokens,
+				"completion_tokens": m.StreamCompletionTokens,
+				"total_tokens":      m.StreamTotalTokens,
+			},
 		}
-
-		m.LastResult = &api.TestResult{
-			StatusCode:       m.StreamStatusCode,
-			Latency:          m.StreamLatency,
-			PromptTokens:     m.StreamPromptTokens,
-			CompletionTokens: m.StreamCompletionTokens,
-			TotalTokens:      m.StreamTotalTokens,
-			RawBody:          assembledJSON,
-			FormattedBody:    api.FormatJSON(assembledJSON),
-			Error:            m.StreamError,
+		buf, err := json.Marshal(assembledMap)
+		if err == nil {
+			assembledJSON = string(buf)
+		} else {
+			assembledJSON = contentText
 		}
-		m.CopyStatusMsg = ""
-
-		m.setViewportContent(formattedContent)
-		return m, nil, ""
+	} else if m.StreamError != "" {
+		assembledJSON = fmt.Sprintf(`{"error": %q}`, m.StreamError)
 	}
 
-	return m, waitForStreamChunkCmd(m.StreamID, m.StreamChan), ""
+	m.LastResult = &api.TestResult{
+		StatusCode:       m.StreamStatusCode,
+		Latency:          m.StreamLatency,
+		PromptTokens:     m.StreamPromptTokens,
+		CompletionTokens: m.StreamCompletionTokens,
+		TotalTokens:      m.StreamTotalTokens,
+		RawBody:          assembledJSON,
+		FormattedBody:    api.FormatJSON(assembledJSON),
+		Error:            m.StreamError,
+	}
+	m.CopyStatusMsg = ""
+
+	m.setViewportContent(formattedContent)
+	m.Viewport.GotoBottom()
+	return m, nil, ""
 }
 
 func (m TesterModel) runFetchModelsCmd() tea.Cmd {

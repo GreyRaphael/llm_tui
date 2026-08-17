@@ -1,6 +1,7 @@
 package views
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -784,5 +785,106 @@ func TestTesterModel_DBUpdateErrorFeedback(t *testing.T) {
 	m, _, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	if !strings.Contains(m.CopyStatusMsg, "Failed to save") {
 		t.Fatalf("expected DB failure status message, got: %q", m.CopyStatusMsg)
+	}
+}
+
+func TestManagerModel_ViewportScrolling(t *testing.T) {
+	database, err := db.InitDB(":memory:")
+	if err != nil {
+		t.Fatalf("failed to init memory db: %v", err)
+	}
+	defer database.Close()
+
+	// Insert 10 provider records
+	for i := 1; i <= 10; i++ {
+		_ = database.CreateRecord(&db.ProviderRecord{
+			Name:    fmt.Sprintf("Provider %02d", i),
+			BaseURL: "https://api.example.com",
+			APIKey:  "sk-test",
+			APIType: api.APITypeOpenAIChat,
+			Model:   "gpt-4o",
+		})
+	}
+
+	m := NewManagerModel(database)
+	m.Resize(80, 15) // small height: viewport height is around 9 lines (holds ~1.5 cards)
+
+	if len(m.Records) != 10 {
+		t.Fatalf("expected 10 records, got %d", len(m.Records))
+	}
+	if m.Viewport.YOffset != 0 {
+		t.Fatalf("expected initial YOffset 0, got %d", m.Viewport.YOffset)
+	}
+
+	// Navigate down 6 times to item 6
+	for i := 0; i < 6; i++ {
+		m, _, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'j'}})
+	}
+	if m.Cursor != 6 {
+		t.Fatalf("expected cursor at 6, got %d", m.Cursor)
+	}
+	if m.Viewport.YOffset == 0 {
+		t.Fatalf("expected viewport to have scrolled down (YOffset > 0), got %d", m.Viewport.YOffset)
+	}
+
+	// Navigate back up to item 0
+	for i := 0; i < 6; i++ {
+		m, _, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'k'}})
+	}
+	if m.Cursor != 0 {
+		t.Fatalf("expected cursor at 0, got %d", m.Cursor)
+	}
+	if m.Viewport.YOffset != 0 {
+		t.Fatalf("expected viewport to scroll back to top (YOffset 0), got %d", m.Viewport.YOffset)
+	}
+
+	// Verify View contains record indicator
+	viewOutput := m.View()
+	if !strings.Contains(viewOutput, "[1/10]") {
+		t.Fatalf("expected [1/10] in view output, got: %s", viewOutput)
+	}
+}
+
+func TestTesterModel_StreamThrottling(t *testing.T) {
+	database, err := db.InitDB(":memory:")
+	if err != nil {
+		t.Fatalf("failed to init memory db: %v", err)
+	}
+	defer database.Close()
+
+	rec := db.ProviderRecord{
+		Name:    "Test",
+		BaseURL: "https://api.example.com",
+		APIKey:  "sk-test",
+		APIType: api.APITypeOpenAIChat,
+		Model:   "gpt-4o",
+	}
+	m := NewTesterModel(database, rec)
+	m.Resize(80, 25)
+	m.IsExecuting = true
+
+	// Send rapid stream chunks
+	chunks := []string{"Hello", " world", " from", " throttled", " stream"}
+	for _, c := range chunks {
+		m, _, _ = m.Update(api.StreamChunkMsg{ContentDelta: c})
+	}
+
+	if m.ContentText != "Hello world from throttled stream" {
+		t.Fatalf("expected full accumulated content text, got %q", m.ContentText)
+	}
+
+	// Finalize stream with Done: true
+	m, _, _ = m.Update(api.StreamChunkMsg{ContentDelta: "!", Done: true})
+	if m.IsExecuting {
+		t.Fatal("expected IsExecuting to be false after Done: true")
+	}
+	if m.ContentText != "Hello world from throttled stream!" {
+		t.Fatalf("expected final content text, got %q", m.ContentText)
+	}
+	if m.LastResult == nil {
+		t.Fatal("expected LastResult populated after stream completion")
+	}
+	if !strings.Contains(m.LastResult.RawBody, "Hello world from throttled stream!") {
+		t.Fatalf("expected LastResult to contain complete response, got: %s", m.LastResult.RawBody)
 	}
 }
