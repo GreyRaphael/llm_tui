@@ -122,14 +122,14 @@ func (m ProbeModel) Update(msg tea.Msg) (ProbeModel, tea.Cmd, string) {
 		if len(m.DiscoveredModels) > 0 {
 			m.SelectedModel = m.DiscoveredModels[0]
 			m.ModelInput.SetValue(m.SelectedModel)
-			m.StatusMsg = fmt.Sprintf("Discovered %d models via /models. Pick or specify one below.", len(m.DiscoveredModels))
+			m.StatusMsg = fmt.Sprintf("Discovered %d models via /models (Model list length: %d). Pick or specify one below.", len(m.DiscoveredModels), len(m.DiscoveredModels))
 		} else {
 			// No models could be discovered; require the user to enter a model id
 			// manually instead of silently falling back to a default like gpt-4o.
 			m.SelectedModel = ""
 			m.ModelInput.SetValue("")
 			m.ModelCursor = 0
-			m.StatusMsg = "Could not fetch models automatically. Please enter the exact model id below."
+			m.StatusMsg = "Could not fetch models automatically (Model list length: 0). Please enter the exact model id below."
 		}
 		m.ModelInput.Focus()
 		m.IsError = false
@@ -397,8 +397,8 @@ func (m ProbeModel) View() string {
 	case StepSelectModel:
 		sb.WriteString(styles.SubtitleStyle.Render("2. Select or Specify Target Model") + "\n\n")
 		if len(m.DiscoveredModels) > 0 {
-			sb.WriteString(styles.MetricLabelStyle.Render("Discovered Models List (Use ↑/↓ to navigate):") + "\n")
 			totalModels := len(m.DiscoveredModels)
+			sb.WriteString(styles.MetricLabelStyle.Render(fmt.Sprintf("Discovered Models List (Model list length: %d, [%d/%d], Use ↑/↓ to navigate):", totalModels, m.ModelCursor+1, totalModels)) + "\n")
 			maxVisible := 20
 
 			startIdx := m.ModelCursor - maxVisible/2
@@ -430,6 +430,8 @@ func (m ProbeModel) View() string {
 				sb.WriteString(fmt.Sprintf("   ▼ %d models below...\n", totalModels-endIdx))
 			}
 			sb.WriteString("\n")
+		} else {
+			sb.WriteString(styles.HelpStyle.Render("No models discovered via /models endpoint (Model list length: 0).") + "\n\n")
 		}
 		sb.WriteString("Target Model Name:\n" + m.ModelInput.View() + "\n\n")
 		sb.WriteString(styles.HelpStyle.Render("[↑/↓] Quick Pick Discovered Model  [Enter] Start API Probing  [Esc] Cancel"))

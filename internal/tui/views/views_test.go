@@ -888,3 +888,116 @@ func TestTesterModel_StreamThrottling(t *testing.T) {
 		t.Fatalf("expected LastResult to contain complete response, got: %s", m.LastResult.RawBody)
 	}
 }
+
+func TestProbeModel_ModelListLengthDisplay(t *testing.T) {
+	database, err := db.InitDB(":memory:")
+	if err != nil {
+		t.Fatalf("failed to init memory db: %v", err)
+	}
+	defer database.Close()
+
+	m := NewProbeModel(database)
+	m.Resize(100, 30)
+
+	// 1. When models are fetched successfully
+	discovered := []string{"gpt-4o", "gpt-4o-mini", "o3-mini"}
+	m, _, _ = m.Update(modelsFetchedMsg{models: discovered})
+
+	if !strings.Contains(m.StatusMsg, "Model list length: 3") {
+		t.Errorf("expected StatusMsg to contain 'Model list length: 3', got %q", m.StatusMsg)
+	}
+
+	viewOutput := m.View()
+	if !strings.Contains(viewOutput, "Model list length: 3") {
+		t.Errorf("expected View to contain 'Model list length: 3', got %q", viewOutput)
+	}
+	if !strings.Contains(viewOutput, "[1/3]") {
+		t.Errorf("expected View to contain '[1/3]', got %q", viewOutput)
+	}
+
+	// 2. When no models are fetched
+	mEmpty := NewProbeModel(database)
+	mEmpty.Resize(100, 30)
+	mEmpty, _, _ = mEmpty.Update(modelsFetchedMsg{models: nil})
+
+	if !strings.Contains(mEmpty.StatusMsg, "Model list length: 0") {
+		t.Errorf("expected empty StatusMsg to contain 'Model list length: 0', got %q", mEmpty.StatusMsg)
+	}
+
+	emptyViewOutput := mEmpty.View()
+	if !strings.Contains(emptyViewOutput, "Model list length: 0") {
+		t.Errorf("expected empty View to contain 'Model list length: 0', got %q", emptyViewOutput)
+	}
+}
+
+func TestTesterModel_ModelListLengthDisplay(t *testing.T) {
+	database, err := db.InitDB(":memory:")
+	if err != nil {
+		t.Fatalf("failed to init memory db: %v", err)
+	}
+	defer database.Close()
+
+	rec := db.ProviderRecord{
+		Name:    "Test Provider",
+		BaseURL: "https://api.openai.com",
+		APIKey:  "sk-test",
+		APIType: api.APITypeOpenAIChat,
+		Model:   "gpt-4o",
+	}
+	_ = database.CreateRecord(&rec)
+
+	m := NewTesterModel(database, rec)
+	m.Resize(120, 35)
+
+	// 1. Initial view without fetched models shows length 0 in badge
+	initialView := m.View()
+	if !strings.Contains(initialView, "Model list length: 0") {
+		t.Errorf("expected initial view badge to contain 'Model list length: 0', got %q", initialView)
+	}
+
+	// 2. Models fetched message
+	discovered := []string{"gpt-4o", "gpt-4o-mini", "o3-mini"}
+	m, _, _ = m.Update(testerModelsFetchedMsg{models: discovered})
+
+	if !strings.Contains(m.CopyStatusMsg, "Model list length: 3") {
+		t.Errorf("expected CopyStatusMsg after fetch to contain 'Model list length: 3', got %q", m.CopyStatusMsg)
+	}
+
+	fetchedView := m.View()
+	if !strings.Contains(fetchedView, "Model list length: 3") {
+		t.Errorf("expected info badge after fetch to contain 'Model list length: 3', got %q", fetchedView)
+	}
+
+	// 3. Open model selector via Alt+M
+	m, _, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'m'}, Alt: true})
+	if !m.SelectingModel {
+		t.Fatal("expected SelectingModel to be true")
+	}
+
+	selectingView := m.View()
+	if !strings.Contains(selectingView, "Model list length: 3") {
+		t.Errorf("expected model selector title to contain 'Model list length: 3', got %q", selectingView)
+	}
+	if !strings.Contains(selectingView, "[1/3]") {
+		t.Errorf("expected model selector title to contain '[1/3]', got %q", selectingView)
+	}
+
+	// 4. Move down and apply model switch on Enter
+	m, _, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'j'}})
+	m, _, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+
+	if m.SelectingModel {
+		t.Fatal("expected SelectingModel to be false after Enter")
+	}
+	if !strings.Contains(m.CopyStatusMsg, "Switched model to 'gpt-4o-mini' (Model list length: 3)") {
+		t.Errorf("expected switch status message with model list length, got %q", m.CopyStatusMsg)
+	}
+
+	// 5. When no models discovered and Alt+M pressed
+	mNoModels := NewTesterModel(database, rec)
+	mNoModels, _, _ = mNoModels.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'m'}, Alt: true})
+	if !strings.Contains(mNoModels.CopyStatusMsg, "Model list length: 0") {
+		t.Errorf("expected Alt+M failure message to contain 'Model list length: 0', got %q", mNoModels.CopyStatusMsg)
+	}
+}
+

@@ -209,6 +209,9 @@ func (m TesterModel) Update(msg tea.Msg) (TesterModel, tea.Cmd, string) {
 				break
 			}
 		}
+		if len(m.DiscoveredModels) > 0 && m.CopyStatusMsg == "" {
+			m.CopyStatusMsg = fmt.Sprintf("Discovered %d models via /models (Model list length: %d)", len(m.DiscoveredModels), len(m.DiscoveredModels))
+		}
 		return m, nil, ""
 
 	case executeFinishedMsg:
@@ -278,7 +281,7 @@ func (m TesterModel) Update(msg tea.Msg) (TesterModel, tea.Cmd, string) {
 					if err := m.DB.UpdateRecord(&m.Record); err != nil {
 						m.CopyStatusMsg = fmt.Sprintf("⚠️ Failed to save model switch to DB: %v", err)
 					} else {
-						m.CopyStatusMsg = fmt.Sprintf("Switched model to '%s'", newModel)
+						m.CopyStatusMsg = fmt.Sprintf("Switched model to '%s' (Model list length: %d)", newModel, len(m.DiscoveredModels))
 					}
 				}
 				m.SelectingModel = false
@@ -299,7 +302,7 @@ func (m TesterModel) Update(msg tea.Msg) (TesterModel, tea.Cmd, string) {
 			if len(m.DiscoveredModels) > 0 {
 				m.SelectingModel = true
 			} else {
-				m.CopyStatusMsg = "No models list available via /models for this provider"
+				m.CopyStatusMsg = "No models list available via /models for this provider (Model list length: 0)"
 			}
 			return m, nil, ""
 
@@ -693,7 +696,12 @@ func (m TesterModel) View() string {
 	sb.WriteString(header + "\n\n")
 
 	// Info Card with Model Switcher Badge
-	modelBadge := fmt.Sprintf("Model: %s [Press Alt+M to switch]", m.Record.Model)
+	var modelBadge string
+	if len(m.DiscoveredModels) > 0 {
+		modelBadge = fmt.Sprintf("Model: %s [Press Alt+M to switch (Model list length: %d)]", m.Record.Model, len(m.DiscoveredModels))
+	} else {
+		modelBadge = fmt.Sprintf("Model: %s [Press Alt+M to switch (Model list length: 0)]", m.Record.Model)
+	}
 	info := fmt.Sprintf(
 		"Base URL: %s | API Type: %s | %s",
 		m.Record.BaseURL,
@@ -732,13 +740,13 @@ func (m TesterModel) View() string {
 	var leftContent string
 
 	if m.SelectingModel {
+		totalModels := len(m.DiscoveredModels)
 		leftBorderColor = styles.ColorAccent
-		leftTitle = "🤖 Select Model (↑/↓ to move, Enter to apply, Esc to cancel)"
+		leftTitle = fmt.Sprintf("🤖 Select Model (Model list length: %d, [%d/%d] - ↑/↓ to move, Enter to apply, Esc to cancel)", totalModels, m.ModelIndex+1, totalModels)
 
 		var modelContentBuilder strings.Builder
 		modelContentBuilder.WriteString(styles.SubtitleStyle.Render(leftTitle) + "\n\n")
 
-		totalModels := len(m.DiscoveredModels)
 		maxVisible := paneHeight - 4
 		if maxVisible < 20 {
 			maxVisible = 20
