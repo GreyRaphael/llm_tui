@@ -35,7 +35,7 @@ func setAuthHeaders(h http.Header, apiType, apiKey string) {
 // setup wizard remains reachable from the Chat Laboratory (which previously
 // only tried urls[0]).
 func doPostWithFallback(ctx context.Context, client *http.Client, urls []string, apiType, apiKey, payloadJSON string) (*http.Response, error) {
-	var lastResp *http.Response
+	var bestResp *http.Response
 	var lastErr error
 	for _, targetURL := range urls {
 		req, err := http.NewRequestWithContext(ctx, "POST", targetURL, bytes.NewBufferString(payloadJSON))
@@ -56,17 +56,24 @@ func doPostWithFallback(ctx context.Context, client *http.Client, urls []string,
 			continue
 		}
 		if resp.StatusCode == http.StatusOK {
+			if bestResp != nil {
+				bestResp.Body.Close()
+			}
 			return resp, nil
 		}
-		// Keep a reference to the last non-200 response so callers can render
-		// its error body, and try the next candidate URL if any remain.
-		if lastResp != nil {
-			lastResp.Body.Close()
+
+		// Keep the most informative error response (e.g. non-404 error like 400/429/500 over fallback 404)
+		if bestResp == nil {
+			bestResp = resp
+		} else if bestResp.StatusCode == http.StatusNotFound && resp.StatusCode != http.StatusNotFound {
+			bestResp.Body.Close()
+			bestResp = resp
+		} else {
+			resp.Body.Close()
 		}
-		lastResp = resp
 	}
-	if lastResp != nil {
-		return lastResp, nil
+	if bestResp != nil {
+		return bestResp, nil
 	}
 	return nil, lastErr
 }
@@ -93,6 +100,8 @@ func ExecuteStreamRequest(ctx context.Context, baseURL, apiKey, apiType, payload
 		endpointPath = "/messages"
 	case APITypeOpenAIResponses:
 		endpointPath = "/responses"
+	case APITypeOpenAIImages:
+		endpointPath = "/images/generations"
 	default:
 		endpointPath = "/chat/completions"
 	}
@@ -375,6 +384,8 @@ func ExecuteTestRequest(baseURL, apiKey, apiType, payloadJSON string) *TestResul
 		endpointPath = "/messages"
 	case APITypeOpenAIResponses:
 		endpointPath = "/responses"
+	case APITypeOpenAIImages:
+		endpointPath = "/images/generations"
 	default:
 		endpointPath = "/chat/completions"
 	}
@@ -434,6 +445,16 @@ func ExecuteTestRequest(baseURL, apiKey, apiType, payloadJSON string) *TestResul
 		res.FormattedBody = FormatJSON(res.RawBody)
 	} else {
 		res.FormattedBody = FormatJSON(res.RawBody)
+	}
+
+	// For OpenAI Images API, automatically decode Base64 and write image files to ./generated_images/
+	if apiType == APITypeOpenAIImages && res.StatusCode == http.StatusOK && !isErrorJSON {
+		prompt := ExtractPromptFromPayload(payloadJSON)
+		savedPaths, sanitizedBody, err := SaveImagesFromResponse(res.RawBody, prompt)
+		if err == nil {
+			res.SavedImages = savedPaths
+			res.FormattedBody = sanitizedBody
+		}
 	}
 
 	// Extract token usage metrics & error if present in JSON

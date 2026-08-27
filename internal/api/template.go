@@ -3,7 +3,20 @@ package api
 import (
 	"bytes"
 	"encoding/json"
+	"strings"
 )
+
+// IsImageModel checks if a model name indicates an image generation model
+func IsImageModel(modelName string) bool {
+	lower := strings.ToLower(modelName)
+	return strings.Contains(lower, "image") ||
+		strings.Contains(lower, "dall-e") ||
+		strings.Contains(lower, "flux") ||
+		strings.Contains(lower, "imagen") ||
+		strings.Contains(lower, "sd") ||
+		strings.Contains(lower, "stable-diffusion") ||
+		strings.Contains(lower, "midjourney")
+}
 
 // GeneratePayloadTemplate generates a preset JSON payload string according to API type, model, and reasoning effort
 func GeneratePayloadTemplate(apiType, model, reasoningEffort string) string {
@@ -13,6 +26,8 @@ func GeneratePayloadTemplate(apiType, model, reasoningEffort string) string {
 			model = "claude-3-5-sonnet-20241022"
 		case APITypeOpenAIResponses:
 			model = "gpt-4o"
+		case APITypeOpenAIImages:
+			model = "gemini-3.1-flash-image"
 		default:
 			model = "gpt-4o"
 		}
@@ -21,6 +36,15 @@ func GeneratePayloadTemplate(apiType, model, reasoningEffort string) string {
 	var rawMap map[string]interface{}
 
 	switch apiType {
+	case APITypeOpenAIImages:
+		rawMap = map[string]interface{}{
+			"model":           model,
+			"prompt":          "a cute little cat sitting on grass, cartoon 3d style",
+			"size":            "512x512",
+			"n":               1,
+			"response_format": "b64_json",
+		}
+
 	case APITypeAnthropic:
 		rawMap = map[string]interface{}{
 			"model": model,

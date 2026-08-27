@@ -35,6 +35,7 @@ type ProbeModel struct {
 	FocusIndex       int
 	Spinner          spinner.Model
 	ProbeResult      *api.ProbeResult
+	AvailableAPITypes []string
 	SelectedAPIType  string
 	SelectedModel    string
 	DiscoveredModels []string
@@ -143,14 +144,12 @@ func (m ProbeModel) Update(msg tea.Msg) (ProbeModel, tea.Cmd, string) {
 			return m, nil, ""
 		}
 		m.ProbeResult = msg.result
-		if len(msg.result.SupportedAPITypes) == 0 {
-			m.StatusMsg = "No supported API endpoints detected for this URL, Key & Model."
-			m.IsError = true
-			m.Step = StepSelectModel
-			return m, nil, ""
+		m.AvailableAPITypes = buildSelectableAPITypes(msg.result, m.SelectedModel)
+		m.APITypeCursor = 0
+		if len(m.AvailableAPITypes) > 0 {
+			m.SelectedAPIType = m.AvailableAPITypes[0]
 		}
 		m.Step = StepSelectAPITypeAndName
-		m.SelectedAPIType = msg.result.SupportedAPITypes[0]
 		m.NameInput.SetValue(m.SelectedModel)
 		m.NameInput.Focus()
 		return m, textinput.Blink, ""
@@ -203,14 +202,39 @@ func (m ProbeModel) Update(msg tea.Msg) (ProbeModel, tea.Cmd, string) {
 					return m, nil, ""
 				}
 
+				// Direct image model routing: if model contains image indicators, skip network probing entirely
+				if api.IsImageModel(m.SelectedModel) {
+					m.Step = StepSelectAPITypeAndName
+					m.ProbeResult = &api.ProbeResult{
+						BaseURL:           m.BaseURLInput.Value(),
+						APIKey:            m.APIKeyInput.Value(),
+						SupportedAPITypes: []string{api.APITypeOpenAIImages, api.APITypeOpenAIChat, api.APITypeOpenAIResponses, api.APITypeAnthropic},
+						EndpointDetails: map[string]string{
+							api.APITypeOpenAIImages:    "Direct routing (Probe skipped to preserve quota)",
+							api.APITypeOpenAIChat:      "Available",
+							api.APITypeOpenAIResponses: "Available",
+							api.APITypeAnthropic:       "Available",
+						},
+					}
+					m.AvailableAPITypes = []string{api.APITypeOpenAIImages, api.APITypeOpenAIChat, api.APITypeOpenAIResponses, api.APITypeAnthropic}
+					m.APITypeCursor = 0
+					m.SelectedAPIType = api.APITypeOpenAIImages
+					m.NameInput.SetValue(m.SelectedModel)
+					m.NameInput.Focus()
+					m.StatusMsg = "⚡ Image model detected — probe skipped to preserve quota. Press Enter to save."
+					m.IsError = false
+					return m, textinput.Blink, ""
+				}
+
 				m.Step = StepProbing
 				m.StatusMsg = ""
 				m.IsError = false
 				return m, tea.Batch(m.Spinner.Tick, m.runProbeCmd()), ""
 
 			case StepSelectAPITypeAndName:
-				if len(m.ProbeResult.SupportedAPITypes) > 0 && m.APITypeCursor < len(m.ProbeResult.SupportedAPITypes) {
-					m.SelectedAPIType = m.ProbeResult.SupportedAPITypes[m.APITypeCursor]
+				types := m.ensureAvailableAPITypes()
+				if len(types) > 0 && m.APITypeCursor < len(types) {
+					m.SelectedAPIType = types[m.APITypeCursor]
 				}
 				aliasName := strings.TrimSpace(m.NameInput.Value())
 				if aliasName == "" {
@@ -243,8 +267,9 @@ func (m ProbeModel) Update(msg tea.Msg) (ProbeModel, tea.Cmd, string) {
 					m.SelectedModel = m.DiscoveredModels[m.ModelCursor]
 					m.ModelInput.SetValue(m.SelectedModel)
 				}
-			} else if m.Step == StepSelectAPITypeAndName && m.ProbeResult != nil {
-				if m.APITypeCursor > 0 {
+			} else if m.Step == StepSelectAPITypeAndName {
+				types := m.ensureAvailableAPITypes()
+				if len(types) > 0 && m.APITypeCursor > 0 {
 					m.selectAPIType(m.APITypeCursor - 1)
 				}
 			}
@@ -256,8 +281,9 @@ func (m ProbeModel) Update(msg tea.Msg) (ProbeModel, tea.Cmd, string) {
 					m.SelectedModel = m.DiscoveredModels[m.ModelCursor]
 					m.ModelInput.SetValue(m.SelectedModel)
 				}
-			} else if m.Step == StepSelectAPITypeAndName && m.ProbeResult != nil {
-				if m.APITypeCursor < len(m.ProbeResult.SupportedAPITypes)-1 {
+			} else if m.Step == StepSelectAPITypeAndName {
+				types := m.ensureAvailableAPITypes()
+				if len(types) > 0 && m.APITypeCursor < len(types)-1 {
 					m.selectAPIType(m.APITypeCursor + 1)
 				}
 			}
@@ -293,21 +319,29 @@ func (m ProbeModel) Update(msg tea.Msg) (ProbeModel, tea.Cmd, string) {
 	return m, cmd, action
 }
 
+func (m *ProbeModel) ensureAvailableAPITypes() []string {
+	if len(m.AvailableAPITypes) == 0 {
+		m.AvailableAPITypes = buildSelectableAPITypes(m.ProbeResult, m.SelectedModel)
+	}
+	return m.AvailableAPITypes
+}
+
 // selectAPIType moves the API type cursor and keeps the auto-generated alias in
 // sync with the selected type, without overwriting a user-customized name.
 func (m *ProbeModel) selectAPIType(cursor int) {
-	if m.ProbeResult == nil || len(m.ProbeResult.SupportedAPITypes) == 0 {
+	types := m.ensureAvailableAPITypes()
+	if len(types) == 0 {
 		return
 	}
 	if cursor < 0 {
 		cursor = 0
-	} else if cursor >= len(m.ProbeResult.SupportedAPITypes) {
-		cursor = len(m.ProbeResult.SupportedAPITypes) - 1
+	} else if cursor >= len(types) {
+		cursor = len(types) - 1
 	}
 
 	oldType := m.SelectedAPIType
 	m.APITypeCursor = cursor
-	m.SelectedAPIType = m.ProbeResult.SupportedAPITypes[cursor]
+	m.SelectedAPIType = types[cursor]
 
 	if oldType == m.SelectedAPIType || m.SelectedModel == "" {
 		return
@@ -316,6 +350,35 @@ func (m *ProbeModel) selectAPIType(cursor int) {
 	if m.NameInput.Value() == oldDefault || m.NameInput.Value() == m.SelectedModel {
 		m.NameInput.SetValue(m.SelectedModel)
 	}
+}
+
+func buildSelectableAPITypes(result *api.ProbeResult, modelName string) []string {
+	var ordered []string
+	seen := make(map[string]bool)
+
+	add := func(t string) {
+		if !seen[t] {
+			seen[t] = true
+			ordered = append(ordered, t)
+		}
+	}
+
+	if api.IsImageModel(modelName) {
+		add(api.APITypeOpenAIImages)
+	}
+
+	if result != nil {
+		for _, t := range result.SupportedAPITypes {
+			add(t)
+		}
+	}
+
+	add(api.APITypeOpenAIChat)
+	add(api.APITypeOpenAIResponses)
+	add(api.APITypeOpenAIImages)
+	add(api.APITypeAnthropic)
+
+	return ordered
 }
 
 func (m *ProbeModel) checkAutofillAPIKey() {
@@ -441,14 +504,30 @@ func (m ProbeModel) View() string {
 
 	case StepSelectAPITypeAndName:
 		sb.WriteString(styles.SubtitleStyle.Render("3. Select Supported API Type & Name Record") + "\n\n")
-		sb.WriteString(styles.MetricLabelStyle.Render("Detected API Capabilities:") + "\n")
-		for i, apiType := range m.ProbeResult.SupportedAPITypes {
+		sb.WriteString(styles.MetricLabelStyle.Render("Available API Capabilities (Use ↑/↓ to choose):") + "\n")
+		types := m.ensureAvailableAPITypes()
+		for i, apiType := range types {
 			prefix := "  "
 			if i == m.APITypeCursor {
 				prefix = "👉"
 			}
-			detail := m.ProbeResult.EndpointDetails[apiType]
-			sb.WriteString(fmt.Sprintf("%s %s (%s)\n", prefix, styles.BadgeSuccessStyle.Render(apiType), detail))
+			detail := ""
+			if m.ProbeResult != nil && m.ProbeResult.EndpointDetails != nil {
+				detail = m.ProbeResult.EndpointDetails[apiType]
+			}
+			if detail == "" {
+				detail = "Available"
+			}
+			badgeStyle := styles.BadgeStyle
+			if m.ProbeResult != nil {
+				for _, supportedType := range m.ProbeResult.SupportedAPITypes {
+					if supportedType == apiType {
+						badgeStyle = styles.BadgeSuccessStyle
+						break
+					}
+				}
+			}
+			sb.WriteString(fmt.Sprintf("%s %s (%s)\n", prefix, badgeStyle.Render(apiType), detail))
 		}
 
 		sb.WriteString("\nRecord Alias Name:\n" + m.NameInput.View() + "\n\n")

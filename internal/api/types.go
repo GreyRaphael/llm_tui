@@ -9,6 +9,7 @@ const (
 	APITypeOpenAIChat      = "openai_chat"
 	APITypeOpenAIResponses = "openai_responses"
 	APITypeAnthropic       = "anthropic_messages"
+	APITypeOpenAIImages    = "openai_images"
 )
 
 // ProbeResult holds the auto-detection results for a provider base_url
@@ -29,6 +30,7 @@ type TestResult struct {
 	TotalTokens      int           `json:"total_tokens"`
 	FormattedBody    string        `json:"formatted_body"`
 	RawBody          string        `json:"raw_body"`
+	SavedImages      []string      `json:"saved_images,omitempty"`
 	Error            string        `json:"error,omitempty"`
 }
 

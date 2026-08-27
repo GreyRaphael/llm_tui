@@ -1,8 +1,8 @@
-# ⚡ LLM TUI: 大模型 Provider 管理与测试终端实验室
+# ⚡ LLM & Image AI TUI: 大模型与生图 Provider 管理与测试终端实验室
 
 [English](README.md) | [简体中文](README-CN.md)
 
-`llm_tui` 是一款采用 **Go 语言** 编写的高性能、现代 Terminal (TUI) 命令行终端工具。用于自动探测、管理并交互式测试 **LLM Provider API 端点**（支持 **OpenAI Chat API**、**OpenAI Responses API** 以及 **Anthropic Messages API**）。
+`llm_tui` 是一款采用 **Go 语言** 编写的高性能、现代 Terminal (TUI) 命令行终端工具。用于自动探测、管理并交互式测试 **LLM & Image AI Provider API 端点**（支持 **OpenAI Chat API**、**OpenAI Responses API**、**Anthropic Messages API** 以及 **OpenAI Images API** 四大主流协议）。
 
 项目基于 **Charm.sh** 生态构建（`bubbletea`、`lipgloss`、`viewport`、`textarea`），搭配 **纯 Go 实现的 SQLite 数据库**（`modernc.org/sqlite`，无需 CGO 编译器依赖）。`llm_tui` 可帮助开发者与 AI 工程师快速验证 API 服务连通性、压测与对比延迟/Token 消耗，并实时调试自定义 JSON 请求 Payload。
 
@@ -14,12 +14,19 @@
   - 支持连接任意兼容 OpenAI 或 Anthropic 协议的 Base URL 端点。
   - API Key 为可选项：本地或免鉴权服务端可留空。
   - 自动查询 `/models` 列表发现可用模型（支持回退到根 URL）；若发现失败，则提示手动输入确切的模型标识。
-  - 并发探测 API 端点能力，自动识别激活的服务模式（`openai_chat`、`openai_responses`、`anthropic_messages`）。
+  - **智能识别图像模型免探测**：当选中包含 `image`、`dall-e`、`flux`、`imagen` 等模型时，自动直通进入 `openai_images` 图像实验室模式，**跳过网络探测以避免消耗宝贵的生图配额与触发 429**。
+  - 文本模型自动并发探测 API 端点能力，自动识别激活的服务模式（`openai_chat`、`openai_responses`、`anthropic_messages`）。
+- **🖼️ 强大的 AI 图像生成实验室 (AI Image Laboratory)**:
+  - 针对 `openai_images` 格式提供专有生图交互工作台。
+  - 默认采用最小算力开销配置（`"aspect_ratio": "1:1"`），节省 Token 并降低限流风险。
+  - **`Alt+A` 画幅比例切换菜单**：按算力与像素尺寸从小到大排序（`1:1`、`4:3`、`3:4`、`3:2`、`2:3`、`16:9`、`9:16`、`21:9`），支持光标一键切换并自动更新 JSON。
+  - **自动保存与防卡顿优化**：接收到响应后自动解码 Base64 并安全保存至 `./generated_images/`（命名为 `YYYYMMDD_HHMMSS_<prompt_slug>.png/.jpg`），同时在终端视口中以摘要展示，避免数兆字节 Raw Base64 导致终端卡死。
+  - **`Ctrl+O` 一键看图**：按下 `Ctrl+O` 自动调用系统默认看图工具跨平台打开最新生成的图片文件。
 - **💾 纯 Go SQLite 本地持久化 (CGO-Free)**:
   - 自动在可执行文件同级目录创建并维护 SQLite 数据库（`providers.db`）。
   - 存储 Provider 配置、自定义 Payload 模板、模型选择及 Reasoning Effort 偏好。
   - 匹配相同 Base URL 时自动填充已保存的 API Key。
-- **🧪 左右分栏交互式测试实验室 (Chat Laboratory)**:
+- **🧪 左右分栏交互式测试实验室 (Chat & Image Laboratory)**:
   - **左侧面板（Request Payload 编辑器）**: 具备实时的多行 JSON 编辑功能。按 `Ctrl+S` 可直接在编辑状态下发送请求，无需切换焦点。
   - **右侧面板（Response 响应视图）**: 实时展示 HTTP 状态码、延迟时间、Token 统计（Prompt, Completion, Total）、吞吐速率（tokens/sec, TPS），以及格式化后的 JSON 响应，支持平滑的 `PgUp` / `PgDn` 按页滚动。
 - **🤖 内置模型快速切换器**:
@@ -58,13 +65,7 @@
 
 解压后运行：
 ```bash
-# Linux / macOS
-tar -xzf llm_tui-<版本>-linux-amd64.tar.gz   # 或 -darwin-arm64 / -darwin-amd64
 ./llm_tui
-
-# Windows (PowerShell)
-Expand-Archive llm_tui-<版本>-windows-amd64.zip
-.\llm_tui.exe
 ```
 
 ### 方式二：从源码编译
@@ -99,11 +100,13 @@ go build -o llm_tui .
 | `Enter` | 进入下一步 / 确认选择 |
 | `Esc` | 取消并返回管理列表 |
 
-### 测试实验室视图 (Chat Laboratory View - 左右分栏)
+### 测试实验室视图 (Chat & Image Laboratory View - 左右分栏)
 | 按键 | 功能说明 |
 | --- | --- |
-| `Ctrl+S` | 发送 Request Payload 并查看响应 |
-| `Alt+S` | 切换流式模式（`stream: true/false`） |
+| `Ctrl+S` | 发送 Request Payload 并查看响应 / 生成图片 |
+| `Ctrl+O` | 自动调用系统默认图片查看器打开刚生成的图片 |
+| `Alt+A` | 唤起/修改图片尺寸与画幅预设菜单（遵循 Gemini 3.1 Flash Image 规格，涵盖 0.5K/1K/2K/4K 各比例预设，从小到大排序） |
+| `Alt+S` | 切换流式模式（`stream: true/false`，仅聊天模型适用） |
 | `Tab` / `Shift+Tab` | 在左侧面板（Request）与右侧面板（Response）之间切换焦点 |
 | `Alt+M` | 唤起/关闭内置模型选择菜单 |
 | `Alt+1` - `Alt+4` | 切换 Reasoning Effort（`1: none`, `2: low`, `3: high`, `4: max`） |

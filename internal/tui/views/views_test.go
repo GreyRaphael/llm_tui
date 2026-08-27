@@ -1001,3 +1001,128 @@ func TestTesterModel_ModelListLengthDisplay(t *testing.T) {
 	}
 }
 
+func TestProbeModel_DirectImageModelRouting(t *testing.T) {
+	database, err := db.InitDB(":memory:")
+	if err != nil {
+		t.Fatalf("InitDB failed: %v", err)
+	}
+	defer database.Close()
+
+	m := NewProbeModel(database)
+	m.Step = StepSelectModel
+	m.DiscoveredModels = []string{"gemini-3.7-flash", "gemini-3.1-flash-image", "gpt-4o"}
+	m.ModelCursor = 1
+	m.SelectedModel = "gemini-3.1-flash-image"
+
+	// Press Enter on image model
+	m, _, action := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+
+	// Must directly skip StepProbing and land on StepSelectAPITypeAndName
+	if m.Step != StepSelectAPITypeAndName {
+		t.Fatalf("expected Step to be StepSelectAPITypeAndName, got %v", m.Step)
+	}
+	if m.SelectedAPIType != api.APITypeOpenAIImages {
+		t.Errorf("expected SelectedAPIType to be openai_images, got %q", m.SelectedAPIType)
+	}
+	if !strings.Contains(m.StatusMsg, "probe skipped") {
+		t.Errorf("expected status message indicating probe skipped, got %q", m.StatusMsg)
+	}
+
+	// Press Enter to save record
+	m, _, action = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if action != "record_created" {
+		t.Fatalf("expected action record_created, got %q", action)
+	}
+
+	recs, _ := database.ListRecords()
+	if len(recs) != 1 || recs[0].APIType != api.APITypeOpenAIImages {
+		t.Errorf("expected 1 saved record with openai_images APIType")
+	}
+}
+
+func TestTesterModel_AspectRatioSwitch(t *testing.T) {
+	database, err := db.InitDB(":memory:")
+	if err != nil {
+		t.Fatalf("InitDB failed: %v", err)
+	}
+	defer database.Close()
+
+	rec := db.ProviderRecord{
+		Name:            "image-gen",
+		BaseURL:         "http://127.0.0.1:3000",
+		APIKey:          "test-key",
+		APIType:         api.APITypeOpenAIImages,
+		Model:           "gemini-3.1-flash-image",
+		CustomPayload:   api.GeneratePayloadTemplate(api.APITypeOpenAIImages, "gemini-3.1-flash-image", ""),
+		ReasoningEffort: db.ReasoningEffortNone,
+	}
+	_ = database.CreateRecord(&rec)
+
+	m := NewTesterModel(database, rec)
+	m.Resize(120, 35)
+
+	// 1. Initial view shows size 512x512 (1:1 0.5K) and image laboratory title
+	view := m.View()
+	if !strings.Contains(view, "AI Image Laboratory") {
+		t.Errorf("expected AI Image Laboratory header, got: %s", view)
+	}
+	if !strings.Contains(view, "Size: 512x512 (1:1 0.5K)") {
+		t.Errorf("expected initial size in header info, got: %s", view)
+	}
+
+	// 2. Open Size switcher via Alt+A
+	m, _, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'a'}, Alt: true})
+	if !m.SelectingAspectRatio && !m.SelectingSize {
+		t.Fatal("expected SelectingAspectRatio or SelectingSize to be true after Alt+A")
+	}
+
+	menuView := m.View()
+	if !strings.Contains(menuView, "Select Image Size") {
+		t.Errorf("expected Select Image Size overlay in left pane, got: %s", menuView)
+	}
+	if !strings.Contains(menuView, "1024x1024") || !strings.Contains(menuView, "1792x1024") {
+		t.Errorf("expected size preset list to contain options, got: %s", menuView)
+	}
+
+	// 3. Move down in list and select a preset (e.g. 1792x1024 16:9)
+	for i := 0; i < 5; i++ {
+		m, _, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'j'}})
+	}
+	m, _, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+
+	if m.SelectingAspectRatio || m.SelectingSize {
+		t.Fatal("expected SelectingSize to be false after Enter")
+	}
+	if !strings.Contains(m.Textarea.Value(), `"size"`) {
+		t.Errorf("expected payload to have size field, got: %s", m.Textarea.Value())
+	}
+}
+
+func TestManagerModel_FourAPITypesBadges(t *testing.T) {
+	database, err := db.InitDB(":memory:")
+	if err != nil {
+		t.Fatalf("InitDB failed: %v", err)
+	}
+	defer database.Close()
+
+	_ = database.CreateRecord(&db.ProviderRecord{Name: "chat", BaseURL: "http://test", APIType: api.APITypeOpenAIChat, Model: "gpt-4o"})
+	_ = database.CreateRecord(&db.ProviderRecord{Name: "resp", BaseURL: "http://test", APIType: api.APITypeOpenAIResponses, Model: "gpt-4o"})
+	_ = database.CreateRecord(&db.ProviderRecord{Name: "anth", BaseURL: "http://test", APIType: api.APITypeAnthropic, Model: "claude-3-5"})
+	_ = database.CreateRecord(&db.ProviderRecord{Name: "img", BaseURL: "http://test", APIType: api.APITypeOpenAIImages, Model: "gemini-3.1-flash-image"})
+
+	m := NewManagerModel(database, "v1.9.0")
+	m.Resize(120, 35)
+
+	view := m.View()
+	if !strings.Contains(view, "LLM & Image AI Manager") {
+		t.Errorf("expected Manager title to mention LLM & Image AI Manager, got: %s", view)
+	}
+	if !strings.Contains(view, "OpenAI Chat") ||
+		!strings.Contains(view, "OpenAI Responses") ||
+		!strings.Contains(view, "Anthropic Messages") ||
+		!strings.Contains(view, "OpenAI Images") {
+		t.Errorf("expected all 4 API type badges to be displayed, got: %s", view)
+	}
+}
+
+

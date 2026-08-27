@@ -130,6 +130,8 @@ func (m *ManagerModel) updateViewportContent() {
 		// Badge style according to api_type
 		var apiTypeBadge string
 		switch r.APIType {
+		case api.APITypeOpenAIImages:
+			apiTypeBadge = styles.BadgeAccentStyle.Render("🖼️ OpenAI Images")
 		case api.APITypeAnthropic:
 			apiTypeBadge = styles.BadgeAccentStyle.Render("Anthropic Messages")
 		case api.APITypeOpenAIResponses:
@@ -270,7 +272,7 @@ func (m ManagerModel) View() string {
 	if verStr == "" {
 		verStr = "v1.0.0"
 	}
-	header := styles.HeaderStyle.Render(fmt.Sprintf("⚡ LLM Provider Manager & Tester %s (SQLite)", verStr))
+	header := styles.HeaderStyle.Render(fmt.Sprintf("⚡ LLM & Image AI Manager %s (Chat · Responses · Anthropic · Images)", verStr))
 	sb.WriteString(header + "\n\n")
 
 	if m.StatusMsg != "" {

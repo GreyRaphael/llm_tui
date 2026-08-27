@@ -1,10 +1,10 @@
-# ⚡ LLM TUI: Provider Manager & Chat Laboratory
+# ⚡ LLM & Image AI TUI: Provider Manager & Chat/Image Laboratory
 
 [English](README.md) | [简体中文](README-CN.md)
 
-`llm_tui` is a fast, modern, terminal-based user interface (TUI) application written in **Go** for auto-probing, managing, and interactively testing **LLM Provider API endpoints** (supporting **OpenAI Chat API**, **OpenAI Responses API**, and **Anthropic Messages API**).
+`llm_tui` is a fast, modern, terminal-based user interface (TUI) application written in **Go** for auto-probing, managing, and interactively testing **LLM & Image AI Provider API endpoints** (supporting **OpenAI Chat API**, **OpenAI Responses API**, **Anthropic Messages API**, and **OpenAI Images API**).
 
-Built using the **Charm.sh** ecosystem (`bubbletea`, `lipgloss`, `viewport`, `textarea`) and a **pure-Go SQLite database** (`modernc.org/sqlite`, CGO-free), `llm_tui` allows developers and AI engineers to quickly verify provider connectivity, benchmark latency/tokens, and debug custom JSON request payloads side-by-side.
+Built using the **Charm.sh** ecosystem (`bubbletea`, `lipgloss`, `viewport`, `textarea`) and a **pure-Go SQLite database** (`modernc.org/sqlite`, CGO-free), `llm_tui` allows developers and AI engineers to quickly verify provider connectivity, benchmark latency/tokens, generate images, and debug custom JSON request payloads side-by-side.
 
 ---
 
@@ -14,12 +14,19 @@ Built using the **Charm.sh** ecosystem (`bubbletea`, `lipgloss`, `viewport`, `te
   - Connects to any OpenAI or Anthropic compatible Base URL.
   - API keys are optional: leave empty for unauthenticated providers / local servers.
   - Automatically queries the `/models` endpoint (with root-URL fallback) to discover available models; if discovery fails, prompts you to enter the exact model ID manually.
-  - Probes endpoints concurrently with realistic timeouts (30s) to detect active capabilities (`openai_chat`, `openai_responses`, `anthropic_messages`).
+  - **Smart Image Model Direct Routing**: When selecting image generation models (e.g. `image`, `dall-e`, `flux`, `imagen`), the probe network check is **automatically skipped to preserve your compute quota and prevent 429 rate limit errors**, taking you straight to the Image Laboratory.
+  - Concurrently probes text endpoints with realistic timeouts to detect active capabilities (`openai_chat`, `openai_responses`, `anthropic_messages`).
+- **🖼️ Dedicated AI Image Laboratory**:
+  - Purpose-built interactive laboratory for `openai_images` models.
+  - Generates with token-saving, lowest-compute preset (`"aspect_ratio": "1:1"`) by default.
+  - **`Alt+A` Aspect Ratio Switcher**: Interactive selector sorted from smallest to largest compute size (`1:1`, `4:3`, `3:4`, `3:2`, `2:3`, `16:9`, `9:16`, `21:9`) with instant JSON update and persistence.
+  - **Auto-Saving & Anti-Lag Optimization**: Automatically decodes Base64 data and writes image files to `./generated_images/` (`YYYYMMDD_HHMMSS_<prompt_slug>.png/.jpg`) while rendering concise summaries in the viewport to keep the terminal smooth.
+  - **`Ctrl+O` Quick Open**: Press `Ctrl+O` to instantly open the latest generated image in your operating system's default viewer.
 - **💾 Pure Go SQLite Storage (CGO-Free)**:
   - Local database (`providers.db`) located alongside the binary.
   - Stores provider configs, custom payload templates, model choices, and reasoning preferences.
   - Auto-fills saved API Keys when matching Base URLs.
-- **🧪 Side-by-Side Split-Pane Chat Laboratory**:
+- **🧪 Side-by-Side Split-Pane Chat & Image Laboratory**:
   - **Left Pane (Request Payload Editor)**: Live multi-line JSON payload editor with active focus. Press `Ctrl+S` to send requests instantly without leaving the editor.
   - **Right Pane (Response Viewport)**: Displays HTTP status code, latency, token usage (Prompt, Completion, Total), tokens-per-second (TPS) throughput, and formatted JSON response with smooth `PgUp` / `PgDn` page scrolling.
 - **🤖 Embedded Model Switcher**:
@@ -58,13 +65,7 @@ Download the archive for your OS/Architecture from the [GitHub Releases](../../r
 
 Extract and run:
 ```bash
-# Linux / macOS
-tar -xzf llm_tui-<version>-linux-amd64.tar.gz   # or -darwin-arm64 / -darwin-amd64
 ./llm_tui
-
-# Windows (PowerShell)
-Expand-Archive llm_tui-<version>-windows-amd64.zip
-.\llm_tui.exe
 ```
 
 ### Option 2: Build from Source
@@ -86,7 +87,7 @@ go build -o llm_tui .
 | Key | Action |
 | --- | --- |
 | `n` | Add New Provider (Launch Setup Wizard) |
-| `Enter` / `t` | Open Selected Provider in Chat Laboratory |
+| `Enter` / `t` | Open Selected Provider in Chat/Image Laboratory |
 | `d` | Delete Selected Provider Record (press twice to confirm) |
 | `↑` / `k`, `↓` / `j` | Navigate Provider Cards |
 | `q` | Quit Application |
@@ -99,11 +100,13 @@ go build -o llm_tui .
 | `Enter` | Proceed to Next Step / Confirm Selection |
 | `Esc` | Cancel and Return to Provider Manager |
 
-### Chat Laboratory View (Split-Pane)
+### Chat & Image Laboratory View (Split-Pane)
 | Key | Action |
 | --- | --- |
-| `Ctrl+S` | Send Request Payload & View Response |
-| `Alt+S` | Toggle Streaming Mode (`stream: true/false`) in Payload JSON |
+| `Ctrl+S` | Send Request Payload & View Response / Generate Image |
+| `Ctrl+O` | Open Latest Generated Image in System Default Viewer |
+| `Alt+A` | Toggle/Select Image Size & Aspect Ratio Presets (Supporting 0.5K/1K/2K/4K dimensions sorted smallest to largest) |
+| `Alt+S` | Toggle Streaming Mode (`stream: true/false`, chat models only) |
 | `Tab` / `Shift+Tab` | Switch Focus between Left Pane (Request) & Right Pane (Response) |
 | `Alt+M` | Toggle Embedded Model Switcher Menu |
 | `Alt+1` - `Alt+4` | Switch Reasoning Effort (`1: none`, `2: low`, `3: high`, `4: max`) |

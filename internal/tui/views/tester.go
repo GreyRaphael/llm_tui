@@ -27,23 +27,80 @@ const (
 	PaneResponse
 )
 
+type ImageSizePreset struct {
+	Size  string
+	Ratio string
+	Tier  string
+	Desc  string
+}
+
+var SupportedImageSizes = []ImageSizePreset{
+	// 0.5K (极速预览)
+	{"512x512", "1:1", "0.5K", "512×512   (1:1 Square - 0.5K Preview, Lowest Token Cost)"},
+	{"704x528", "4:3", "0.5K", "704×528   (4:3 Classic Landscape - 0.5K Preview)"},
+	{"528x704", "3:4", "0.5K", "528×704   (3:4 Classic Portrait - 0.5K Preview)"},
+	{"768x512", "3:2", "0.5K", "768×512   (3:2 DSLR Landscape - 0.5K Preview)"},
+	{"512x768", "2:3", "0.5K", "512×768   (2:3 DSLR Portrait - 0.5K Preview)"},
+	{"912x512", "16:9", "0.5K", "912×512   (16:9 Widescreen - 0.5K Preview)"},
+	{"512x912", "9:16", "0.5K", "512×912   (9:16 Mobile Portrait - 0.5K Preview)"},
+	{"1024x438", "21:9", "0.5K", "1024×438  (21:9 Ultrawide - 0.5K Preview)"},
+
+	// 1K (标准清晰度 - 默认推荐)
+	{"1024x1024", "1:1", "1K", "1024×1024 (1:1 Square - 1K Standard, Recommended)"},
+	{"1408x1056", "4:3", "1K", "1408×1056 (4:3 Classic Landscape - 1K Standard)"},
+	{"1056x1408", "3:4", "1K", "1056×1408 (3:4 Classic Portrait - 1K Standard)"},
+	{"1536x1024", "3:2", "1K", "1536×1024 (3:2 DSLR Landscape - 1K Standard)"},
+	{"1024x1536", "2:3", "1K", "1024×1536 (2:3 DSLR Portrait - 1K Standard)"},
+	{"1792x1024", "16:9", "1K", "1792×1024 (16:9 Widescreen - 1K Desktop Wallpaper)"},
+	{"1024x1792", "9:16", "1K", "1024×1792 (9:16 Mobile Portrait - 1K Phone Wallpaper)"},
+	{"2048x876", "21:9", "1K", "2048×876  (21:9 Ultrawide Cinematic - 1K Standard)"},
+
+	// 2K (生产级高清)
+	{"2048x2048", "1:1", "2K", "2048×2048 (1:1 Square - 2K High-Res Production)"},
+	{"2816x2112", "4:3", "2K", "2816×2112 (4:3 Classic Landscape - 2K High-Res)"},
+	{"2112x2816", "3:4", "2K", "2112×2816 (3:4 Classic Portrait - 2K High-Res)"},
+	{"3072x2048", "3:2", "2K", "3072×2048 (3:2 DSLR Landscape - 2K High-Res)"},
+	{"2048x3072", "2:3", "2K", "2048×3072 (2:3 DSLR Portrait - 2K High-Res)"},
+	{"2752x1536", "16:9", "2K", "2752×1536 (16:9 Widescreen - 2K High-Res Wallpaper)"},
+	{"1536x2752", "9:16", "2K", "1536×2752 (9:16 Mobile Portrait - 2K High-Res Phone)"},
+	{"4096x1752", "21:9", "2K", "4096×1752 (21:9 Ultrawide Cinematic - 2K High-Res)"},
+
+	// 4K (超清大师)
+	{"4096x4096", "1:1", "4K", "4096×4096 (1:1 Square - 4K Ultra-HD Master)"},
+	{"5632x4224", "4:3", "4K", "5632×4224 (4:3 Classic Landscape - 4K Ultra-HD)"},
+	{"4224x5632", "3:4", "4K", "4224×5632 (3:4 Classic Portrait - 4K Ultra-HD)"},
+	{"6144x4096", "3:2", "4K", "6144×4096 (3:2 DSLR Landscape - 4K Ultra-HD)"},
+	{"4096x6144", "2:3", "4K", "4096×6144 (2:3 DSLR Portrait - 4K Ultra-HD)"},
+	{"5632x3072", "16:9", "4K", "5632×3072 (16:9 Widescreen - 4K Ultra-HD Master)"},
+	{"3072x5632", "9:16", "4K", "3072×5632 (9:16 Mobile Portrait - 4K Ultra-HD Master)"},
+	{"8192x3504", "21:9", "4K", "8192×3504 (21:9 Ultrawide Cinematic - 4K Ultra-HD)"},
+}
+
+// Deprecated: Alias for backward compatibility
+var SupportedAspectRatios = SupportedImageSizes
+
 type TesterModel struct {
-	DB               *db.DB
-	Record           db.ProviderRecord
-	ReasoningEffort  string
-	Textarea         textarea.Model
-	Viewport         viewport.Model
-	Spinner          spinner.Model
-	ActivePane       ActivePane
-	IsExecuting      bool
-	IsStreamMode     bool
-	SelectingModel   bool
-	DiscoveredModels []string
-	ModelIndex       int
-	LastResult       *api.TestResult
-	CopyStatusMsg    string
-	Width            int
-	Height           int
+	DB                   *db.DB
+	Record               db.ProviderRecord
+	ReasoningEffort      string
+	Textarea             textarea.Model
+	Viewport             viewport.Model
+	Spinner              spinner.Model
+	ActivePane           ActivePane
+	IsExecuting          bool
+	IsStreamMode         bool
+	SelectingModel       bool
+	SelectingAspectRatio bool
+	SelectingSize        bool
+	DiscoveredModels     []string
+	ModelIndex           int
+	AspectRatioIndex     int
+	SizeIndex            int
+	LastResult           *api.TestResult
+	LatestSavedImage     string
+	CopyStatusMsg        string
+	Width                int
+	Height               int
 	StreamChan       chan api.StreamChunkMsg
 	// StreamID is bumped on every stream request send; each streamed chunk is
 	// tagged with the id of the request it belongs to so stale chunks from a
@@ -219,7 +276,12 @@ func (m TesterModel) Update(msg tea.Msg) (TesterModel, tea.Cmd, string) {
 		m.LastResult = msg.result
 		m.setViewportContent(msg.result.FormattedBody)
 		m.Viewport.GotoTop()
-		m.CopyStatusMsg = ""
+		if len(msg.result.SavedImages) > 0 {
+			m.LatestSavedImage = msg.result.SavedImages[0]
+			m.CopyStatusMsg = fmt.Sprintf("🖼️ Saved %d image(s) to ./generated_images! [Ctrl+O] to open.", len(msg.result.SavedImages))
+		} else {
+			m.CopyStatusMsg = ""
+		}
 		return m, nil, ""
 
 	case streamChunkMsg:
@@ -237,6 +299,50 @@ func (m TesterModel) Update(msg tea.Msg) (TesterModel, tea.Cmd, string) {
 		return m.handleStreamChunk(msg)
 
 	case tea.KeyMsg:
+		if m.SelectingAspectRatio || m.SelectingSize {
+			switch msg.String() {
+			case "esc":
+				m.SelectingAspectRatio = false
+				m.SelectingSize = false
+				return m, nil, ""
+			case "up", "k":
+				if m.AspectRatioIndex > 0 {
+					m.AspectRatioIndex--
+					m.SizeIndex = m.AspectRatioIndex
+				}
+				return m, nil, ""
+			case "down", "j":
+				if m.AspectRatioIndex < len(SupportedImageSizes)-1 {
+					m.AspectRatioIndex++
+					m.SizeIndex = m.AspectRatioIndex
+				}
+				return m, nil, ""
+			case "enter":
+				if m.AspectRatioIndex >= 0 && m.AspectRatioIndex < len(SupportedImageSizes) {
+					preset := SupportedImageSizes[m.AspectRatioIndex]
+					var payloadMap map[string]interface{}
+					if err := json.Unmarshal([]byte(m.Textarea.Value()), &payloadMap); err == nil {
+						payloadMap["size"] = preset.Size
+						delete(payloadMap, "aspect_ratio")
+						delete(payloadMap, "aspectRatio")
+						delete(payloadMap, "image_size")
+						delete(payloadMap, "imageSize")
+						delete(payloadMap, "_imageSize")
+						if buf, err := json.MarshalIndent(payloadMap, "", "  "); err == nil {
+							m.Textarea.SetValue(string(buf))
+						}
+					}
+					m.Record.CustomPayload = m.Textarea.Value()
+					_ = m.DB.UpdateRecord(&m.Record)
+					m.CopyStatusMsg = fmt.Sprintf("📐 Changed size to '%s' (%s %s)", preset.Size, preset.Ratio, preset.Tier)
+				}
+				m.SelectingAspectRatio = false
+				m.SelectingSize = false
+				return m, nil, ""
+			}
+			return m, nil, ""
+		}
+
 		if m.SelectingModel {
 			switch msg.String() {
 			case "esc":
@@ -297,6 +403,44 @@ func (m TesterModel) Update(msg tea.Msg) (TesterModel, tea.Cmd, string) {
 			m.CancelStreamRequest()
 			action = "back_to_manager"
 			return m, nil, action
+
+		case "alt+a":
+			if m.Record.APIType == api.APITypeOpenAIImages {
+				m.SelectingAspectRatio = true
+				m.SelectingSize = true
+				var payloadMap map[string]interface{}
+				if err := json.Unmarshal([]byte(m.Textarea.Value()), &payloadMap); err == nil {
+					currSize, hasSize := payloadMap["size"].(string)
+					currRatio, _ := payloadMap["aspect_ratio"].(string)
+					for idx, opt := range SupportedImageSizes {
+						if hasSize && (opt.Size == currSize || strings.EqualFold(opt.Size, currSize)) {
+							m.AspectRatioIndex = idx
+							m.SizeIndex = idx
+							break
+						} else if !hasSize && opt.Ratio == currRatio {
+							m.AspectRatioIndex = idx
+							m.SizeIndex = idx
+							break
+						}
+					}
+				}
+			} else {
+				m.CopyStatusMsg = "Image size presets are only applicable to image generation (openai_images)"
+			}
+			return m, nil, ""
+
+		case "ctrl+o":
+			if m.LatestSavedImage != "" {
+				err := api.OpenImageFile(m.LatestSavedImage)
+				if err != nil {
+					m.CopyStatusMsg = fmt.Sprintf("❌ Failed to open image: %v", err)
+				} else {
+					m.CopyStatusMsg = fmt.Sprintf("🖼️ Opened %s in system viewer", m.LatestSavedImage)
+				}
+			} else if m.Record.APIType == api.APITypeOpenAIImages {
+				m.CopyStatusMsg = "No image has been generated yet in this session (Press Ctrl+S to generate)"
+			}
+			return m, nil, ""
 
 		case "alt+m":
 			if len(m.DiscoveredModels) > 0 {
@@ -692,33 +836,68 @@ func waitForStreamChunkCmd(id int, ch chan api.StreamChunkMsg) tea.Cmd {
 func (m TesterModel) View() string {
 	var sb strings.Builder
 
-	header := styles.HeaderStyle.Render(fmt.Sprintf("🧪 LLM Chat Laboratory: %s (%s)", m.Record.Model, m.Record.APIType))
+	var header string
+	if m.Record.APIType == api.APITypeOpenAIImages {
+		header = styles.HeaderStyle.Render(fmt.Sprintf("🖼️ AI Image Laboratory: %s (%s)", m.Record.Model, m.Record.APIType))
+	} else {
+		header = styles.HeaderStyle.Render(fmt.Sprintf("🧪 LLM Chat Laboratory: %s (%s)", m.Record.Model, m.Record.APIType))
+	}
 	sb.WriteString(header + "\n\n")
 
-	// Info Card with Model Switcher Badge
+	// Info Card with Model Switcher & Aspect Ratio Badges
 	var modelBadge string
 	if len(m.DiscoveredModels) > 0 {
 		modelBadge = fmt.Sprintf("Model: %s [Press Alt+M to switch (Model list length: %d)]", m.Record.Model, len(m.DiscoveredModels))
 	} else {
 		modelBadge = fmt.Sprintf("Model: %s [Press Alt+M to switch (Model list length: 0)]", m.Record.Model)
 	}
+
+	var sizeBadge string
+	if m.Record.APIType == api.APITypeOpenAIImages {
+		currSizeDisplay := "512x512 (1:1 0.5K)"
+		var payloadMap map[string]interface{}
+		if err := json.Unmarshal([]byte(m.Textarea.Value()), &payloadMap); err == nil {
+			if s, ok := payloadMap["size"].(string); ok && s != "" {
+				matched := false
+				for _, opt := range SupportedImageSizes {
+					if strings.EqualFold(opt.Size, s) {
+						currSizeDisplay = fmt.Sprintf("%s (%s %s)", opt.Size, opt.Ratio, opt.Tier)
+						matched = true
+						break
+					}
+				}
+				if !matched {
+					currSizeDisplay = s
+				}
+			} else if r, ok := payloadMap["aspect_ratio"].(string); ok && r != "" {
+				currSizeDisplay = fmt.Sprintf("Ratio: %s", r)
+			}
+		}
+		sizeBadge = fmt.Sprintf(" | Size: %s [Press Alt+A to change]", styles.MetricValueStyle.Render(currSizeDisplay))
+	}
+
 	info := fmt.Sprintf(
-		"Base URL: %s | API Type: %s | %s",
+		"Base URL: %s | API Type: %s | %s%s",
 		m.Record.BaseURL,
 		styles.BadgeSuccessStyle.Render(m.Record.APIType),
 		styles.MetricValueStyle.Render(modelBadge),
+		sizeBadge,
 	)
 	sb.WriteString(styles.CardStyle.Render(info) + "\n")
 
-	// Reasoning Effort Switcher
-	sb.WriteString(styles.MetricLabelStyle.Render("Reasoning Effort Shortcuts: ") + " ")
-	efforts := []string{db.ReasoningEffortNone, db.ReasoningEffortLow, db.ReasoningEffortHigh, db.ReasoningEffortMax}
-	for i, eff := range efforts {
-		num := i + 1
-		if eff == m.ReasoningEffort {
-			sb.WriteString(styles.BadgeAccentStyle.Render(fmt.Sprintf("[%d] %s", num, eff)) + " ")
-		} else {
-			sb.WriteString(styles.BadgeStyle.Render(fmt.Sprintf("[%d] %s", num, eff)) + " ")
+	if m.Record.APIType == api.APITypeOpenAIImages {
+		sb.WriteString(styles.HelpStyle.Render("📁 Output directory: ./generated_images/ | Press [Ctrl+O] to open last generated image in system viewer") + "\n")
+	} else {
+		// Reasoning Effort Switcher for Chat models
+		sb.WriteString(styles.MetricLabelStyle.Render("Reasoning Effort Shortcuts: ") + " ")
+		efforts := []string{db.ReasoningEffortNone, db.ReasoningEffortLow, db.ReasoningEffortHigh, db.ReasoningEffortMax}
+		for i, eff := range efforts {
+			num := i + 1
+			if eff == m.ReasoningEffort {
+				sb.WriteString(styles.BadgeAccentStyle.Render(fmt.Sprintf("[%d] %s", num, eff)) + " ")
+			} else {
+				sb.WriteString(styles.BadgeStyle.Render(fmt.Sprintf("[%d] %s", num, eff)) + " ")
+			}
 		}
 	}
 	sb.WriteString("\n\n")
@@ -734,12 +913,57 @@ func (m TesterModel) View() string {
 		paneHeight = 16
 	}
 
-	// 1. Render Left Pane (Request Payload Editor OR Model Picker Overlay)
+	// 1. Render Left Pane (Request Payload Editor OR Size / Model Picker Overlay)
 	var leftBorderColor lipgloss.Color
 	var leftTitle string
 	var leftContent string
 
-	if m.SelectingModel {
+	if m.SelectingAspectRatio || m.SelectingSize {
+		totalSizes := len(SupportedImageSizes)
+		leftBorderColor = styles.ColorAccent
+		leftTitle = fmt.Sprintf("📐 Select Image Size ([%d/%d] - ↑/↓ to move, Enter to apply, Esc to cancel)", m.AspectRatioIndex+1, totalSizes)
+
+		var sizeContentBuilder strings.Builder
+		sizeContentBuilder.WriteString(styles.SubtitleStyle.Render(leftTitle) + "\n\n")
+
+		maxVisible := paneHeight - 4
+		if maxVisible < 10 {
+			maxVisible = 10
+		}
+
+		startIdx := m.AspectRatioIndex - maxVisible/2
+		if startIdx < 0 {
+			startIdx = 0
+		}
+		endIdx := startIdx + maxVisible
+		if endIdx > totalSizes {
+			endIdx = totalSizes
+			startIdx = endIdx - maxVisible
+			if startIdx < 0 {
+				startIdx = 0
+			}
+		}
+
+		if startIdx > 0 {
+			sizeContentBuilder.WriteString(styles.HelpStyle.Render(fmt.Sprintf("  ▲ ... %d smaller sizes above ...", startIdx)) + "\n")
+		}
+
+		for i := startIdx; i < endIdx; i++ {
+			opt := SupportedImageSizes[i]
+			prefix := "  "
+			if i == m.AspectRatioIndex {
+				prefix = "👉"
+			}
+			sizeContentBuilder.WriteString(fmt.Sprintf("%s %-10s %s\n", prefix, styles.BadgeAccentStyle.Render(opt.Size), styles.MetricValueStyle.Render(opt.Desc)))
+		}
+
+		if endIdx < totalSizes {
+			sizeContentBuilder.WriteString(styles.HelpStyle.Render(fmt.Sprintf("  ▼ ... %d larger sizes below ...", totalSizes-endIdx)) + "\n")
+		}
+
+		leftContent = sizeContentBuilder.String()
+
+	} else if m.SelectingModel {
 		totalModels := len(m.DiscoveredModels)
 		leftBorderColor = styles.ColorAccent
 		leftTitle = fmt.Sprintf("🤖 Select Model (Model list length: %d, [%d/%d] - ↑/↓ to move, Enter to apply, Esc to cancel)", totalModels, m.ModelIndex+1, totalModels)
@@ -907,9 +1131,16 @@ func (m TesterModel) View() string {
 	sb.WriteString(splitView + "\n")
 
 	// Help Footer
-	helpKey := styles.HelpStyle.Render(
-		"[Ctrl+S] Send  [Ctrl+Y] Copy Req  [Ctrl+U] Copy Resp  [PgUp/PgDn] Scroll  [Alt+M] Model  [Alt+S] Stream  [Tab] Pane  [Alt+1~4] Reasoning  [Esc] Manager",
-	)
+	var helpKey string
+	if m.Record.APIType == api.APITypeOpenAIImages {
+		helpKey = styles.HelpStyle.Render(
+			"[Ctrl+S] Generate  [Ctrl+O] Open Image  [Alt+A] Aspect Ratio  [Alt+M] Model  [Ctrl+Y] Copy Req  [Ctrl+U] Copy Resp  [PgUp/PgDn] Scroll  [Tab] Pane  [Esc] Manager",
+		)
+	} else {
+		helpKey = styles.HelpStyle.Render(
+			"[Ctrl+S] Send  [Ctrl+Y] Copy Req  [Ctrl+U] Copy Resp  [PgUp/PgDn] Scroll  [Alt+M] Model  [Alt+S] Stream  [Tab] Pane  [Alt+1~4] Reasoning  [Esc] Manager",
+		)
+	}
 	sb.WriteString(helpKey)
 
 	return sb.String()
