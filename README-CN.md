@@ -36,8 +36,10 @@
   - 为 LLM 输出及思考过程中的代码块（Python, Go, SQL, JSON 等）自动提供语法高亮，优雅展示标题、粗体与列表。
 - **📐 响应视图自适应 Word Wrap 自动折行**:
   - 动态计算 Viewport 列宽，按窗口大小时实时 Reflow 重排，彻底避免长行溢出穿透框线。
-- **🔑 跨平台无损 Unicode / UTF-8 系统剪贴板**:
-  - 彻底解决 Linux (X11 `UTF8_STRING` / Wayland `wl-copy`), WSL (PowerShell UTF-8), macOS 与 Windows 复制粘贴中文与 Emoji 乱码问题。
+- **🔑 跨平台无损 Unicode / UTF-8 系统剪贴板（OSC 52 + 原生支持）**:
+  - 同时支持本地桌面（X11 `UTF8_STRING` / Wayland `wl-copy`、macOS `pbcopy`、Windows PowerShell）与远程 SSH / 无图形环境（OSC 52 ANSI 终端转义序列）。
+  - 在远程服务器使用 SSH 连接时，无需安装 `xclip` 或配置 X11 转发，即可直接一键复制到本地电脑剪贴板。
+  - 彻底解决中文与 Emoji 复制乱码问题。
   - `Ctrl+Y` 一键复制 Request Payload，`Ctrl+U` 一键复制完整 Response JSON。
 
 ---
@@ -118,7 +120,7 @@ go build -o llm_tui .
 - **样式与布局**: [github.com/charmbracelet/lipgloss](https://github.com/charmbracelet/lipgloss)
 - **组件库**: [bubbles/textarea](https://github.com/charmbracelet/bubbles), [bubbles/viewport](https://github.com/charmbracelet/bubbles), [bubbles/spinner](https://github.com/charmbracelet/bubbles)
 - **数据库**: [modernc.org/sqlite](https://modernc.org/sqlite) (纯 Go 实现，无 CGO 依赖)
-- **剪贴板集成**: [github.com/atotto/clipboard](https://github.com/atotto/clipboard)
+- **剪贴板与终端协议**: [github.com/aymanbagabas/go-osc52](https://github.com/aymanbagabas/go-osc52/v2) (OSC 52 终端转义协议支持远程 SSH 剪贴板) 与跨平台原生剪贴板集成
 
 ---
 

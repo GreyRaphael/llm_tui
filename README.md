@@ -36,8 +36,10 @@ Built using the **Charm.sh** ecosystem (`bubbletea`, `lipgloss`, `viewport`, `te
   - Automatically highlights code blocks (Python, Go, SQL, JSON, etc.), header tags, bold text, and lists.
 - **📐 Responsive Word Wrap & Auto Reflow**:
   - Dynamically calculates Viewport width and performs real-time text reflow during terminal window resizing, eliminating horizontal border overflow.
-- **🔑 Cross-Platform Lossless Unicode & UTF-8 Clipboard**:
-  - Solves Chinese and Emoji clipboard garbled text issues across Linux (X11 `UTF8_STRING` / Wayland `wl-copy`), WSL (PowerShell UTF-8), macOS, and Windows natively.
+- **🔑 Cross-Platform Lossless Unicode & UTF-8 Clipboard (OSC 52 + Native)**:
+  - Supports both local desktops (X11 `UTF8_STRING` / Wayland `wl-copy`, macOS `pbcopy`, Windows PowerShell) and remote SSH / headless Linux environments (OSC 52 ANSI escape sequences).
+  - Copies text directly into your local machine's clipboard without needing `xclip` or X11 forwarding over SSH.
+  - Solves Chinese and Emoji clipboard garbled text issues natively.
   - `Ctrl+Y`: One-click copy Request Payload; `Ctrl+U`: One-click copy Response JSON.
 
 ---
@@ -118,7 +120,7 @@ go build -o llm_tui .
 - **Styling**: [github.com/charmbracelet/lipgloss](https://github.com/charmbracelet/lipgloss)
 - **Components**: [bubbles/textarea](https://github.com/charmbracelet/bubbles), [bubbles/viewport](https://github.com/charmbracelet/bubbles), [bubbles/spinner](https://github.com/charmbracelet/bubbles)
 - **Database**: [modernc.org/sqlite](https://modernc.org/sqlite) (Pure Go SQLite driver, NO CGO required)
-- **Clipboard Integration**: [github.com/atotto/clipboard](https://github.com/atotto/clipboard)
+- **Clipboard & Terminal Protocol**: [github.com/aymanbagabas/go-osc52](https://github.com/aymanbagabas/go-osc52/v2) (OSC 52 escape sequences for remote SSH clipboard) & native cross-platform clipboards
 
 ---
 
