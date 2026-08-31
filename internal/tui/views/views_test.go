@@ -1112,7 +1112,7 @@ func TestManagerModel_FourAPITypesBadges(t *testing.T) {
 	_ = database.CreateRecord(&db.ProviderRecord{Name: "anth", BaseURL: "http://test", APIType: api.APITypeAnthropic, Model: "claude-3-5"})
 	_ = database.CreateRecord(&db.ProviderRecord{Name: "img", BaseURL: "http://test", APIType: api.APITypeOpenAIImages, Model: "gemini-3.1-flash-image"})
 
-	m := NewManagerModel(database, "v1.9.0")
+	m := NewManagerModel(database, "v1.10.0")
 	m.Resize(120, 35)
 
 	view := m.View()
