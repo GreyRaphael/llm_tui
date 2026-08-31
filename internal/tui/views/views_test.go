@@ -2,6 +2,8 @@ package views
 
 import (
 	"fmt"
+	"os"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -1124,5 +1126,44 @@ func TestManagerModel_FourAPITypesBadges(t *testing.T) {
 		t.Errorf("expected all 4 API type badges to be displayed, got: %s", view)
 	}
 }
+
+func TestTesterModel_CtrlOHeadlessFeedback(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("skipping Linux headless Ctrl+O test on non-Linux platform")
+	}
+
+	origDisplay := os.Getenv("DISPLAY")
+	origWayland := os.Getenv("WAYLAND_DISPLAY")
+	defer func() {
+		_ = os.Setenv("DISPLAY", origDisplay)
+		_ = os.Setenv("WAYLAND_DISPLAY", origWayland)
+	}()
+
+	_ = os.Unsetenv("DISPLAY")
+	_ = os.Unsetenv("WAYLAND_DISPLAY")
+
+	database, err := db.InitDB(":memory:")
+	if err != nil {
+		t.Fatalf("InitDB failed: %v", err)
+	}
+	defer database.Close()
+
+	rec := db.ProviderRecord{
+		Name:    "Image Gen",
+		BaseURL: "https://api.openai.com",
+		APIType: api.APITypeOpenAIImages,
+		Model:   "gemini-3.1-flash-image",
+	}
+
+	m := NewTesterModel(database, rec)
+	m.LatestSavedImage = "./generated_images/sample.png"
+
+	m, _, _ = m.Update(tea.KeyMsg{Type: tea.KeyCtrlO})
+
+	if !strings.Contains(m.CopyStatusMsg, "remote headless SSH session") && !strings.Contains(m.CopyStatusMsg, "DISPLAY or WAYLAND_DISPLAY not set") {
+		t.Fatalf("expected friendly headless message in CopyStatusMsg, got: %q", m.CopyStatusMsg)
+	}
+}
+
 
 

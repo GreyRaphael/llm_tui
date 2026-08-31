@@ -15,9 +15,43 @@ type DB struct {
 	*sql.DB
 }
 
-// GetDefaultDBPath calculates the sqlite database file path adjacent to the executable.
-// If running under `go run` (detected by temp directory heuristics) or if resolution fails,
-// it falls back to current working directory.
+// isDirWritable tests whether a directory exists and can be written to by creating and removing a test file.
+func isDirWritable(dir string) bool {
+	if dir == "" {
+		return false
+	}
+	testFile := filepath.Join(dir, fmt.Sprintf(".test_write_%d", os.Getpid()))
+	f, err := os.OpenFile(testFile, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0600)
+	if err != nil {
+		return false
+	}
+	_ = f.Close()
+	_ = os.Remove(testFile)
+	return true
+}
+
+// getUserConfigDBPath returns ~/.config/llm_tui/providers.db (or OS equivalent user config directory).
+func getUserConfigDBPath() string {
+	if configDir, err := os.UserConfigDir(); err == nil && configDir != "" {
+		appDir := filepath.Join(configDir, "llm_tui")
+		if err := os.MkdirAll(appDir, 0755); err == nil && isDirWritable(appDir) {
+			return filepath.Join(appDir, "providers.db")
+		}
+	}
+	if homeDir, err := os.UserHomeDir(); err == nil && homeDir != "" {
+		appDir := filepath.Join(homeDir, ".config", "llm_tui")
+		if err := os.MkdirAll(appDir, 0755); err == nil && isDirWritable(appDir) {
+			return filepath.Join(appDir, "providers.db")
+		}
+	}
+	return ""
+}
+
+// GetDefaultDBPath calculates the sqlite database file path.
+// It prioritizes placing `providers.db` adjacent to the executable if the directory is writable.
+// If running under `go run` (detected by temp directory heuristics) or if the executable directory
+// is read-only (e.g. installed to /usr/local/bin), it falls back to user config directory
+// (~/.config/llm_tui/providers.db) or current working directory.
 func GetDefaultDBPath() string {
 	exePath, err := os.Executable()
 	if err == nil {
@@ -31,11 +65,28 @@ func GetDefaultDBPath() string {
 		tempDir := os.TempDir()
 		if !strings.Contains(exePath, "go-build") && !strings.HasPrefix(exePath, tempDir) {
 			dir := filepath.Dir(exePath)
-			return filepath.Join(dir, "providers.db")
+			if isDirWritable(dir) {
+				return filepath.Join(dir, "providers.db")
+			}
+			// Executable directory is read-only (e.g. /usr/local/bin); fallback to user config directory
+			if userConfigPath := getUserConfigDBPath(); userConfigPath != "" {
+				return userConfigPath
+			}
 		}
 	}
+
+	// For `go run` or if executable resolution fails, try current working directory
 	cwd, err := os.Getwd()
-	if err == nil {
+	if err == nil && isDirWritable(cwd) {
+		return filepath.Join(cwd, "providers.db")
+	}
+
+	// Fallback to user config directory
+	if userConfigPath := getUserConfigDBPath(); userConfigPath != "" {
+		return userConfigPath
+	}
+
+	if cwd != "" {
 		return filepath.Join(cwd, "providers.db")
 	}
 	return "providers.db"
@@ -46,6 +97,13 @@ func GetDefaultDBPath() string {
 func InitDB(dbPath string) (*DB, error) {
 	if dbPath == "" {
 		dbPath = GetDefaultDBPath()
+	}
+
+	if dbPath != ":memory:" {
+		dir := filepath.Dir(dbPath)
+		if dir != "" && dir != "." {
+			_ = os.MkdirAll(dir, 0755)
+		}
 	}
 
 	conn, err := sql.Open("sqlite", dbPath)

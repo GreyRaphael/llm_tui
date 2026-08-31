@@ -2,6 +2,7 @@ package db
 
 import (
 	"database/sql"
+	"os"
 	"path/filepath"
 	"testing"
 )
@@ -270,3 +271,39 @@ func TestMigrateAliasNames(t *testing.T) {
 		t.Errorf("custom name should be preserved, got %v", names)
 	}
 }
+
+func TestIsDirWritable(t *testing.T) {
+	tempDir := t.TempDir()
+	if !isDirWritable(tempDir) {
+		t.Errorf("expected tempDir %s to be writable", tempDir)
+	}
+	if isDirWritable("/non_existent_directory_for_testing_12345") {
+		t.Errorf("expected non-existent directory not to be writable")
+	}
+}
+
+func TestGetDefaultDBPath(t *testing.T) {
+	dbPath := GetDefaultDBPath()
+	if dbPath == "" {
+		t.Fatal("expected non-empty GetDefaultDBPath")
+	}
+	if filepath.Base(dbPath) != "providers.db" {
+		t.Errorf("expected db file name to be providers.db, got %s", filepath.Base(dbPath))
+	}
+}
+
+func TestInitDBCreatesParentDir(t *testing.T) {
+	tempDir := t.TempDir()
+	nestedDBPath := filepath.Join(tempDir, "nested", "sub", "dir", "test_providers.db")
+
+	database, err := InitDB(nestedDBPath)
+	if err != nil {
+		t.Fatalf("InitDB failed to create nested parent directories: %v", err)
+	}
+	defer database.Close()
+
+	if _, err := os.Stat(nestedDBPath); os.IsNotExist(err) {
+		t.Fatalf("expected database file to exist at %s", nestedDBPath)
+	}
+}
+

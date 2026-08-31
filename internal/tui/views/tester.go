@@ -3,6 +3,7 @@ package views
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -433,7 +434,11 @@ func (m TesterModel) Update(msg tea.Msg) (TesterModel, tea.Cmd, string) {
 			if m.LatestSavedImage != "" {
 				err := api.OpenImageFile(m.LatestSavedImage)
 				if err != nil {
-					m.CopyStatusMsg = fmt.Sprintf("❌ Failed to open image: %v", err)
+					if errors.Is(err, api.ErrHeadlessEnvironment) {
+						m.CopyStatusMsg = fmt.Sprintf("⚠️ %v", err)
+					} else {
+						m.CopyStatusMsg = fmt.Sprintf("❌ Failed to open image: %v", err)
+					}
 				} else {
 					m.CopyStatusMsg = fmt.Sprintf("🖼️ Opened %s in system viewer", m.LatestSavedImage)
 				}

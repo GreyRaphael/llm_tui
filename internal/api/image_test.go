@@ -1,8 +1,10 @@
 package api
 
 import (
+	"errors"
 	"fmt"
 	"os"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -96,4 +98,34 @@ func TestSaveImagesFromResponse(t *testing.T) {
 		t.Fatalf("expected 1 saved image for input with newlines, got %d", len(pathsWithNewlines))
 	}
 }
+
+func TestOpenImageFileHeadless(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("skipping Linux headless test on non-Linux platform")
+	}
+
+	origDisplay := os.Getenv("DISPLAY")
+	origWayland := os.Getenv("WAYLAND_DISPLAY")
+	defer func() {
+		_ = os.Setenv("DISPLAY", origDisplay)
+		_ = os.Setenv("WAYLAND_DISPLAY", origWayland)
+	}()
+
+	_ = os.Unsetenv("DISPLAY")
+	_ = os.Unsetenv("WAYLAND_DISPLAY")
+
+	err := OpenImageFile("./test.png")
+	if err == nil {
+		t.Fatal("expected error in headless environment with no DISPLAY/WAYLAND_DISPLAY")
+	}
+
+	if !errors.Is(err, ErrHeadlessEnvironment) {
+		t.Errorf("expected ErrHeadlessEnvironment, got: %v", err)
+	}
+
+	if !strings.Contains(err.Error(), "test.png") {
+		t.Errorf("expected error message to mention saved file path, got: %v", err)
+	}
+}
+
 

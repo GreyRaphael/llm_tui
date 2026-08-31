@@ -3,6 +3,7 @@ package api
 import (
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -157,6 +158,9 @@ func SaveImagesFromResponse(rawJSON string, prompt string) ([]string, string, er
 	return savedPaths, string(sanitizedJSON), nil
 }
 
+// ErrHeadlessEnvironment is returned when trying to open a graphical viewer in a headless terminal (e.g. over remote SSH)
+var ErrHeadlessEnvironment = errors.New("remote headless SSH session: cannot open graphical viewer (DISPLAY or WAYLAND_DISPLAY not set)")
+
 // OpenImageFile opens an image file using the host system's default image viewer
 func OpenImageFile(filePath string) error {
 	absPath, err := filepath.Abs(filePath)
@@ -167,6 +171,9 @@ func OpenImageFile(filePath string) error {
 	var cmd *exec.Cmd
 	switch runtime.GOOS {
 	case "linux":
+		if os.Getenv("DISPLAY") == "" && os.Getenv("WAYLAND_DISPLAY") == "" {
+			return fmt.Errorf("%w. File saved at: %s", ErrHeadlessEnvironment, absPath)
+		}
 		cmd = exec.Command("xdg-open", absPath)
 	case "darwin":
 		cmd = exec.Command("open", absPath)
