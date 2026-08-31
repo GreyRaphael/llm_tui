@@ -1165,5 +1165,105 @@ func TestTesterModel_CtrlOHeadlessFeedback(t *testing.T) {
 	}
 }
 
+func TestManagerModel_DeleteNearBottomNoUISqueeze(t *testing.T) {
+	database, err := db.InitDB(":memory:")
+	if err != nil {
+		t.Fatalf("InitDB failed: %v", err)
+	}
+	defer database.Close()
+
+	// Insert 20 records
+	for i := 1; i <= 20; i++ {
+		_ = database.CreateRecord(&db.ProviderRecord{
+			Name:    fmt.Sprintf("Provider %02d", i),
+			BaseURL: "https://api.example.com",
+			APIKey:  "sk-test",
+			APIType: api.APITypeOpenAIChat,
+			Model:   "gpt-4o",
+		})
+	}
+
+	m := NewManagerModel(database)
+	termHeight := 24
+	m.Resize(80, termHeight)
+
+	// Navigate to the very last record (index 19)
+	for i := 0; i < 19; i++ {
+		m, _, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'j'}})
+	}
+
+	if m.Cursor != 19 {
+		t.Fatalf("expected cursor at 19, got %d", m.Cursor)
+	}
+	if m.Viewport.YOffset == 0 {
+		t.Fatalf("expected viewport scrolled down, got YOffset=0")
+	}
+
+	initialVpHeight := m.Viewport.Height
+
+	// First press of 'd' (Confirmation prompt)
+	m, _, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'d'}})
+	if !m.ConfirmDelete {
+		t.Fatal("expected ConfirmDelete true")
+	}
+	if m.Viewport.Height >= initialVpHeight {
+		t.Fatalf("expected Viewport.Height to shrink when StatusMsg is shown, initial=%d current=%d", initialVpHeight, m.Viewport.Height)
+	}
+
+	// Verify rendered view lines do not exceed terminal height
+	renderedView := m.View()
+	renderedLineCount := strings.Count(renderedView, "\n") + 1
+	if renderedLineCount > termHeight+2 { // allow minimal margin
+		t.Fatalf("rendered view exceeds terminal height: %d lines > %d", renderedLineCount, termHeight)
+	}
+
+	// Second press of 'd' (Execute delete)
+	m, _, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'d'}})
+	if len(m.Records) != 19 {
+		t.Fatalf("expected 19 records after deletion, got %d", len(m.Records))
+	}
+	if m.Cursor != 18 {
+		t.Fatalf("expected cursor to adjust to new last item (18), got %d", m.Cursor)
+	}
+
+	// Verify YOffset is not past bottom
+	totalLines := m.Viewport.TotalLineCount()
+	if m.Viewport.YOffset > totalLines-m.Viewport.Height && totalLines > m.Viewport.Height {
+		t.Fatalf("viewport YOffset (%d) overscrolled past bottom (totalLines=%d, height=%d)", m.Viewport.YOffset, totalLines, m.Viewport.Height)
+	}
+
+	// Cancel/clear status and verify Viewport.Height restores
+	m, _, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'k'}})
+	if m.StatusMsg != "" {
+		t.Fatalf("expected StatusMsg cleared on navigation, got: %q", m.StatusMsg)
+	}
+	if m.Viewport.Height != initialVpHeight {
+		t.Fatalf("expected Viewport.Height restored to %d after clearing StatusMsg, got %d", initialVpHeight, m.Viewport.Height)
+	}
+}
+
+func TestManagerModel_NarrowWidthCardWidth(t *testing.T) {
+	database, err := db.InitDB(":memory:")
+	if err != nil {
+		t.Fatalf("InitDB failed: %v", err)
+	}
+	defer database.Close()
+
+	_ = database.CreateRecord(&db.ProviderRecord{
+		Name:    "Provider Narrow",
+		BaseURL: "https://api.example.com",
+		APIType: api.APITypeOpenAIChat,
+		Model:   "gpt-4o",
+	})
+
+	m := NewManagerModel(database)
+	m.Resize(45, 20)
+
+	if m.Viewport.Width > 45 {
+		t.Fatalf("expected Viewport.Width <= 45 on narrow screen, got %d", m.Viewport.Width)
+	}
+}
+
+
 
 

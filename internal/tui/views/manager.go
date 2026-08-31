@@ -45,13 +45,13 @@ func NewManagerModel(database *db.DB, version ...string) ManagerModel {
 	return m
 }
 
-func (m *ManagerModel) Resize(w, h int) {
-	m.Width = w
-	m.Height = h
-
-	cardWidth := w - 6
-	if cardWidth < 60 {
-		cardWidth = 72
+func (m *ManagerModel) recalculateDimensions() {
+	cardWidth := m.Width - 6
+	if cardWidth < 30 {
+		cardWidth = m.Width - 2
+		if cardWidth < 20 {
+			cardWidth = 20
+		}
 	}
 
 	headerHeight := 3
@@ -60,13 +60,19 @@ func (m *ManagerModel) Resize(w, h int) {
 	}
 	footerHeight := 3
 
-	availHeight := h - headerHeight - footerHeight
-	if availHeight < 5 {
-		availHeight = 5
+	availHeight := m.Height - headerHeight - footerHeight
+	if availHeight < 3 {
+		availHeight = 3
 	}
 
 	m.Viewport.Width = cardWidth + 2
 	m.Viewport.Height = availHeight
+}
+
+func (m *ManagerModel) Resize(w, h int) {
+	m.Width = w
+	m.Height = h
+	m.recalculateDimensions()
 	m.updateViewportContent()
 	m.ensureCursorVisible()
 }
@@ -76,6 +82,7 @@ func (m *ManagerModel) RefreshRecords() {
 	if err != nil {
 		m.StatusMsg = fmt.Sprintf("Failed to load records: %v", err)
 		m.IsError = true
+		m.recalculateDimensions()
 		m.updateViewportContent()
 		return
 	}
@@ -87,14 +94,18 @@ func (m *ManagerModel) RefreshRecords() {
 		m.StatusMsg = "No provider records saved yet. Press 'n' to add a new provider!"
 		m.IsError = false
 	}
+	m.recalculateDimensions()
 	m.updateViewportContent()
 	m.ensureCursorVisible()
 }
 
 func (m *ManagerModel) updateViewportContent() {
 	cardWidth := m.Width - 6
-	if cardWidth < 60 {
-		cardWidth = 72
+	if cardWidth < 30 {
+		cardWidth = m.Width - 2
+		if cardWidth < 20 {
+			cardWidth = 20
+		}
 	}
 
 	normalCardStyle := lipgloss.NewStyle().
@@ -184,6 +195,13 @@ func (m *ManagerModel) ensureCursorVisible() {
 		return
 	}
 
+	totalLines := m.Viewport.TotalLineCount()
+	if totalLines > vpHeight && m.Viewport.YOffset > totalLines-vpHeight {
+		m.Viewport.SetYOffset(totalLines - vpHeight)
+	} else if totalLines <= vpHeight {
+		m.Viewport.SetYOffset(0)
+	}
+
 	if startLine < m.Viewport.YOffset {
 		m.Viewport.SetYOffset(startLine)
 	} else if endLine > m.Viewport.YOffset+vpHeight {
@@ -202,16 +220,28 @@ func (m ManagerModel) Update(msg tea.Msg) (ManagerModel, tea.Cmd, string) {
 			m.ConfirmDelete = false
 			m.StatusMsg = ""
 			m.IsError = false
+			m.recalculateDimensions()
+			m.ensureCursorVisible()
 		}
 
 		switch msg.String() {
 		case "k", "up":
+			if m.StatusMsg != "" && !m.ConfirmDelete {
+				m.StatusMsg = ""
+				m.IsError = false
+				m.recalculateDimensions()
+			}
 			if m.Cursor > 0 {
 				m.Cursor--
 				m.updateViewportContent()
 				m.ensureCursorVisible()
 			}
 		case "j", "down":
+			if m.StatusMsg != "" && !m.ConfirmDelete {
+				m.StatusMsg = ""
+				m.IsError = false
+				m.recalculateDimensions()
+			}
 			if m.Cursor < len(m.Records)-1 {
 				m.Cursor++
 				m.updateViewportContent()
@@ -236,6 +266,7 @@ func (m ManagerModel) Update(msg tea.Msg) (ManagerModel, tea.Cmd, string) {
 					if err != nil {
 						m.StatusMsg = fmt.Sprintf("Failed to delete record: %v", err)
 						m.IsError = true
+						m.recalculateDimensions()
 					} else {
 						m.StatusMsg = fmt.Sprintf("Deleted record '%s'", target.Name)
 						m.IsError = false
@@ -247,6 +278,8 @@ func (m ManagerModel) Update(msg tea.Msg) (ManagerModel, tea.Cmd, string) {
 					m.ConfirmDelete = true
 					m.StatusMsg = fmt.Sprintf("⚠️  Press 'd' again to confirm deleting '%s'", m.Records[m.Cursor].Name)
 					m.IsError = true
+					m.recalculateDimensions()
+					m.ensureCursorVisible()
 				}
 			}
 		case "q":
