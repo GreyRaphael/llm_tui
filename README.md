@@ -33,7 +33,7 @@ Built using the **Charm.sh** ecosystem (`bubbletea`, `lipgloss`, `viewport`, `te
   - Press `Alt+M` in the Chat Laboratory to open an embedded model picker viewport in the left panel.
   - Displays up to 20 models with centered scrolling pointers (`👉`). Selection updates model choice and saves to SQLite automatically.
 - **🧠 Flexible Reasoning Effort Shortcuts**:
-  - Press `Alt+1` to `Alt+4` to toggle Reasoning Effort (`none`, `low`, `high`, `max`).
+  - Press `Alt+1` to `Alt+6` to toggle Reasoning Effort (`none`, `low`, `medium`, `high`, `xhigh`, `max`).
   - Automatically formats `reasoning_effort` for OpenAI Chat, `reasoning` for OpenAI Responses, and `output_config.effort` for Anthropic Messages.
 - **⚡ Real-Time SSE Streaming & Reasoning Process Visualization**:
   - Native support for typewriter-style real-time streaming via HTTP SSE (`text/event-stream`).
@@ -109,7 +109,7 @@ go build -o llm_tui .
 | `Alt+S` | Toggle Streaming Mode (`stream: true/false`, chat models only) |
 | `Tab` / `Shift+Tab` | Switch Focus between Left Pane (Request) & Right Pane (Response) |
 | `Alt+M` | Toggle Embedded Model Switcher Menu |
-| `Alt+1` - `Alt+4` | Switch Reasoning Effort (`1: none`, `2: low`, `3: high`, `4: max`) |
+| `Alt+1` - `Alt+6` | Switch Reasoning Effort (`1: none`, `2: low`, `3: medium`, `4: high`, `5: xhigh`, `6: max`) |
 | `Ctrl+Y` | Copy Request JSON Payload to Clipboard |
 | `Ctrl+U` | Copy Response JSON Payload to Clipboard |
 | `PgUp` / `PgDn` | Scroll Response Viewport Page by Page |

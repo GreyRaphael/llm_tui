@@ -51,7 +51,7 @@ func GeneratePayloadTemplate(apiType, model, reasoningEffort string) string {
 			"messages": []map[string]interface{}{
 				{
 					"role":    "user",
-					"content": "hello, introduce yourself",
+					"content": "hi,  list your abilities.",
 				},
 			},
 			"max_tokens": 1024,
@@ -66,7 +66,7 @@ func GeneratePayloadTemplate(apiType, model, reasoningEffort string) string {
 	case APITypeOpenAIResponses:
 		rawMap = map[string]interface{}{
 			"model":  model,
-			"input":  "hello, introduce yourself",
+			"input":  "hi,  list your abilities.",
 			"stream": true,
 		}
 		if reasoningEffort != "" && reasoningEffort != "none" {
@@ -81,7 +81,7 @@ func GeneratePayloadTemplate(apiType, model, reasoningEffort string) string {
 			"messages": []map[string]interface{}{
 				{
 					"role":    "user",
-					"content": "hello, introduce yourself",
+					"content": "hi,  list your abilities.",
 				},
 			},
 			"stream": true,

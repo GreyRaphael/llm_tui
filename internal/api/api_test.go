@@ -57,6 +57,14 @@ func TestGeneratePayloadTemplate(t *testing.T) {
 	if generic["reasoning_effort"] != "high" {
 		t.Errorf("expected reasoning_effort 'high', got %v", generic["reasoning_effort"])
 	}
+	msgs, ok := generic["messages"].([]interface{})
+	if !ok || len(msgs) == 0 {
+		t.Fatalf("expected messages array, got %v", generic["messages"])
+	}
+	firstMsg := msgs[0].(map[string]interface{})
+	if firstMsg["content"] != "hi,  list your abilities." {
+		t.Errorf("expected content 'hi,  list your abilities.', got %v", firstMsg["content"])
+	}
 
 	// 1b. OpenAI Chat with Reasoning Effort None (should omit reasoning_effort)
 	payloadNone := GeneratePayloadTemplate(APITypeOpenAIChat, "gpt-4o", "none")
@@ -68,20 +76,56 @@ func TestGeneratePayloadTemplate(t *testing.T) {
 		t.Errorf("expected reasoning_effort to be omitted when effort is 'none', got %v", genericNone["reasoning_effort"])
 	}
 
+	// 1c. OpenAI Chat with Reasoning Effort Medium and XHigh
+	for _, effort := range []string{"medium", "xhigh"} {
+		p := GeneratePayloadTemplate(APITypeOpenAIChat, "gpt-4o", effort)
+		var parsed map[string]interface{}
+		if err := json.Unmarshal([]byte(p), &parsed); err != nil {
+			t.Fatalf("failed to unmarshal %s payload: %v", effort, err)
+		}
+		if parsed["reasoning_effort"] != effort {
+			t.Errorf("expected reasoning_effort %q, got %v", effort, parsed["reasoning_effort"])
+		}
+	}
+
 	// 2. OpenAI Responses with Reasoning Effort Max
 	payloadResponses := GeneratePayloadTemplate(APITypeOpenAIResponses, "gpt-4o", "max")
 	if err := json.Unmarshal([]byte(payloadResponses), &generic); err != nil {
 		t.Fatalf("failed to unmarshal responses payload: %v", err)
+	}
+	if generic["input"] != "hi,  list your abilities." {
+		t.Errorf("expected input 'hi,  list your abilities.', got %v", generic["input"])
 	}
 	reasoning, ok := generic["reasoning"].(map[string]interface{})
 	if !ok || reasoning["effort"] != "max" {
 		t.Errorf("expected reasoning.effort 'max', got %v", generic["reasoning"])
 	}
 
+	// 2b. OpenAI Responses with Reasoning Effort Medium and XHigh
+	for _, effort := range []string{"medium", "xhigh"} {
+		p := GeneratePayloadTemplate(APITypeOpenAIResponses, "gpt-4o", effort)
+		var parsed map[string]interface{}
+		if err := json.Unmarshal([]byte(p), &parsed); err != nil {
+			t.Fatalf("failed to unmarshal %s payload: %v", effort, err)
+		}
+		rMap, ok := parsed["reasoning"].(map[string]interface{})
+		if !ok || rMap["effort"] != effort {
+			t.Errorf("expected reasoning.effort %q, got %v", effort, parsed["reasoning"])
+		}
+	}
+
 	// 3. Anthropic with Output Config Effort High
 	payloadAnthropic := GeneratePayloadTemplate(APITypeAnthropic, "claude-3-5-sonnet-20241022", "high")
 	if err := json.Unmarshal([]byte(payloadAnthropic), &generic); err != nil {
 		t.Fatalf("failed to unmarshal anthropic payload: %v", err)
+	}
+	anthropicMsgs, ok := generic["messages"].([]interface{})
+	if !ok || len(anthropicMsgs) == 0 {
+		t.Fatalf("expected anthropic messages array, got %v", generic["messages"])
+	}
+	anthropicFirstMsg := anthropicMsgs[0].(map[string]interface{})
+	if anthropicFirstMsg["content"] != "hi,  list your abilities." {
+		t.Errorf("expected content 'hi,  list your abilities.', got %v", anthropicFirstMsg["content"])
 	}
 	outputConfig, ok := generic["output_config"].(map[string]interface{})
 	if !ok || outputConfig["effort"] != "high" {
@@ -99,6 +143,19 @@ func TestGeneratePayloadTemplate(t *testing.T) {
 	}
 	if _, ok := genericAnthropicNone["output_config"]; ok {
 		t.Errorf("expected output_config to be omitted when effort is 'none', got %v", genericAnthropicNone["output_config"])
+	}
+
+	// 3c. Anthropic with Output Config Effort Medium and XHigh
+	for _, effort := range []string{"medium", "xhigh"} {
+		p := GeneratePayloadTemplate(APITypeAnthropic, "claude-3-5-sonnet-20241022", effort)
+		var parsed map[string]interface{}
+		if err := json.Unmarshal([]byte(p), &parsed); err != nil {
+			t.Fatalf("failed to unmarshal %s payload: %v", effort, err)
+		}
+		oConfig, ok := parsed["output_config"].(map[string]interface{})
+		if !ok || oConfig["effort"] != effort {
+			t.Errorf("expected output_config.effort %q, got %v", effort, parsed["output_config"])
+		}
 	}
 }
 

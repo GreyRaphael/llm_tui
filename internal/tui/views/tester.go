@@ -576,15 +576,19 @@ func (m TesterModel) Update(msg tea.Msg) (TesterModel, tea.Cmd, string) {
 			}
 			return m, nil, ""
 
-		case "alt+1", "alt+2", "alt+3", "alt+4":
+		case "alt+1", "alt+2", "alt+3", "alt+4", "alt+5", "alt+6":
 			switch msg.String() {
 			case "alt+1":
 				m.ReasoningEffort = db.ReasoningEffortNone
 			case "alt+2":
 				m.ReasoningEffort = db.ReasoningEffortLow
 			case "alt+3":
-				m.ReasoningEffort = db.ReasoningEffortHigh
+				m.ReasoningEffort = db.ReasoningEffortMedium
 			case "alt+4":
+				m.ReasoningEffort = db.ReasoningEffortHigh
+			case "alt+5":
+				m.ReasoningEffort = db.ReasoningEffortXHigh
+			case "alt+6":
 				m.ReasoningEffort = db.ReasoningEffortMax
 			}
 			// Preserve current stream setting when regenerating template
@@ -895,7 +899,14 @@ func (m TesterModel) View() string {
 	} else {
 		// Reasoning Effort Switcher for Chat models
 		sb.WriteString(styles.MetricLabelStyle.Render("Reasoning Effort Shortcuts: ") + " ")
-		efforts := []string{db.ReasoningEffortNone, db.ReasoningEffortLow, db.ReasoningEffortHigh, db.ReasoningEffortMax}
+		efforts := []string{
+			db.ReasoningEffortNone,
+			db.ReasoningEffortLow,
+			db.ReasoningEffortMedium,
+			db.ReasoningEffortHigh,
+			db.ReasoningEffortXHigh,
+			db.ReasoningEffortMax,
+		}
 		for i, eff := range efforts {
 			num := i + 1
 			if eff == m.ReasoningEffort {
@@ -1143,7 +1154,7 @@ func (m TesterModel) View() string {
 		)
 	} else {
 		helpKey = styles.HelpStyle.Render(
-			"[Ctrl+S] Send  [Ctrl+Y] Copy Req  [Ctrl+U] Copy Resp  [PgUp/PgDn] Scroll  [Alt+M] Model  [Alt+S] Stream  [Tab] Pane  [Alt+1~4] Reasoning  [Esc] Manager",
+			"[Ctrl+S] Send  [Ctrl+Y] Copy Req  [Ctrl+U] Copy Resp  [PgUp/PgDn] Scroll  [Alt+M] Model  [Alt+S] Stream  [Tab] Pane  [Alt+1~6] Reasoning  [Esc] Manager",
 		)
 	}
 	sb.WriteString(helpKey)

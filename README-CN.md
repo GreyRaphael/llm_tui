@@ -33,7 +33,7 @@
   - 在测试实验室中按下 `Alt+M` 即可在左侧面板唤起内置模型选择菜单。
   - 展示多达 20 个可用模型，具备指针指示（`👉`）。选择后自动更新配置并同步保存至 SQLite。
 - **🧠 灵活的 Reasoning Effort 快捷切换**:
-  - 按下 `Alt+1` 至 `Alt+4` 可快速切换推理强度（`none`, `low`, `high`, `max`）。
+  - 按下 `Alt+1` 至 `Alt+6` 可快速切换推理强度（`none`, `low`, `medium`, `high`, `xhigh`, `max`）。
   - 自动适配 OpenAI Chat (`reasoning_effort`)、OpenAI Responses (`reasoning`) 与 Anthropic Messages (`output_config.effort`) 规范。
 - **⚡ 实时 SSE 流式传输与思考过程 (Reasoning Process) 可视化**:
   - 原生支持基于 HTTP SSE (`text/event-stream`) 的打字机式实时流式渲染。
@@ -109,7 +109,7 @@ go build -o llm_tui .
 | `Alt+S` | 切换流式模式（`stream: true/false`，仅聊天模型适用） |
 | `Tab` / `Shift+Tab` | 在左侧面板（Request）与右侧面板（Response）之间切换焦点 |
 | `Alt+M` | 唤起/关闭内置模型选择菜单 |
-| `Alt+1` - `Alt+4` | 切换 Reasoning Effort（`1: none`, `2: low`, `3: high`, `4: max`） |
+| `Alt+1` - `Alt+6` | 切换 Reasoning Effort（`1: none`, `2: low`, `3: medium`, `4: high`, `5: xhigh`, `6: max`） |
 | `Ctrl+Y` | 复制 Request JSON Payload 到系统剪贴板 |
 | `Ctrl+U` | 复制 Response JSON 到系统剪贴板 |
 | `PgUp` / `PgDn` | 上下翻页滚动响应结果 |

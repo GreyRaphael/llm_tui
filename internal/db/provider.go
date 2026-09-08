@@ -9,10 +9,12 @@ import (
 
 // ReasoningEffort constants
 const (
-	ReasoningEffortNone = "none"
-	ReasoningEffortLow  = "low"
-	ReasoningEffortHigh = "high"
-	ReasoningEffortMax  = "max"
+	ReasoningEffortNone   = "none"
+	ReasoningEffortLow    = "low"
+	ReasoningEffortMedium = "medium"
+	ReasoningEffortHigh   = "high"
+	ReasoningEffortXHigh  = "xhigh"
+	ReasoningEffortMax    = "max"
 )
 
 // ProviderRecord represents a saved configuration record in SQLite

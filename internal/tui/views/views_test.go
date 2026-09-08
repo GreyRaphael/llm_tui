@@ -232,6 +232,50 @@ func TestTesterModel_ReasoningEffortShortcuts(t *testing.T) {
 	if m.Width != 120 || m.Height != 40 {
 		t.Errorf("expected dimensions 120x40, got %dx%d", m.Width, m.Height)
 	}
+
+	// Verify initial payload content has updated default prompt
+	if !strings.Contains(m.Textarea.Value(), "hi,  list your abilities.") {
+		t.Errorf("expected initial payload to contain 'hi,  list your abilities.', got %q", m.Textarea.Value())
+	}
+
+	// Test shortcuts Alt+1 through Alt+6
+	cases := []struct {
+		runeChar rune
+		expected string
+	}{
+		{'2', db.ReasoningEffortLow},
+		{'3', db.ReasoningEffortMedium},
+		{'4', db.ReasoningEffortHigh},
+		{'5', db.ReasoningEffortXHigh},
+		{'6', db.ReasoningEffortMax},
+		{'1', db.ReasoningEffortNone},
+	}
+
+	for _, c := range cases {
+		m, _, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{c.runeChar}, Alt: true})
+		if m.ReasoningEffort != c.expected {
+			t.Errorf("after Alt+%c, expected effort %q, got %q", c.runeChar, c.expected, m.ReasoningEffort)
+		}
+		if c.expected != db.ReasoningEffortNone {
+			if !strings.Contains(m.Textarea.Value(), fmt.Sprintf(`"reasoning_effort": %q`, c.expected)) {
+				t.Errorf("after Alt+%c, expected payload to contain reasoning_effort %q, got: %s", c.runeChar, c.expected, m.Textarea.Value())
+			}
+		}
+	}
+
+	// Verify view rendering contains all 6 shortcuts and footer
+	view := m.View()
+	if !strings.Contains(view, "Reasoning Effort Shortcuts:") {
+		t.Errorf("expected view to contain 'Reasoning Effort Shortcuts:', got %s", view)
+	}
+	for _, label := range []string{"[1] none", "[2] low", "[3] medium", "[4] high", "[5] xhigh", "[6] max"} {
+		if !strings.Contains(view, label) {
+			t.Errorf("expected view to contain %q, got %s", label, view)
+		}
+	}
+	if !strings.Contains(view, "[Alt+1~6] Reasoning") {
+		t.Errorf("expected view to contain '[Alt+1~6] Reasoning', got %s", view)
+	}
 }
 
 func TestFormatTPS(t *testing.T) {
@@ -1112,7 +1156,7 @@ func TestManagerModel_FourAPITypesBadges(t *testing.T) {
 	_ = database.CreateRecord(&db.ProviderRecord{Name: "anth", BaseURL: "http://test", APIType: api.APITypeAnthropic, Model: "claude-3-5"})
 	_ = database.CreateRecord(&db.ProviderRecord{Name: "img", BaseURL: "http://test", APIType: api.APITypeOpenAIImages, Model: "gemini-3.1-flash-image"})
 
-	m := NewManagerModel(database, "v1.10.0")
+	m := NewManagerModel(database, "v1.10.1")
 	m.Resize(120, 35)
 
 	view := m.View()
