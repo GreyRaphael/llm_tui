@@ -28,15 +28,11 @@ type ManagerModel struct {
 	cardOffsets   [][2]int
 }
 
-func NewManagerModel(database *db.DB, version ...string) ManagerModel {
-	ver := "v1.0.0"
-	if len(version) > 0 && version[0] != "" {
-		ver = version[0]
-	}
+func NewManagerModel(database *db.DB, version string) ManagerModel {
 	vp := viewport.New(76, 14)
 	m := ManagerModel{
 		DB:       database,
-		Version:  ver,
+		Version:  version,
 		Viewport: vp,
 		Width:    80,
 		Height:   24,
@@ -210,7 +206,7 @@ func (m *ManagerModel) ensureCursorVisible() {
 }
 
 func (m ManagerModel) Update(msg tea.Msg) (ManagerModel, tea.Cmd, string) {
-	var action string // e.g. "probe_new", "open_tester", "quit"
+	var action string // e.g. "probe_new", "open_tester"
 	var cmd tea.Cmd
 
 	switch msg := msg.(type) {
@@ -248,9 +244,9 @@ func (m ManagerModel) Update(msg tea.Msg) (ManagerModel, tea.Cmd, string) {
 				m.ensureCursorVisible()
 			}
 		case "pgup", "ctrl+b":
-			m.Viewport.HalfViewUp()
+			m.Viewport.HalfPageUp()
 		case "pgdown", "ctrl+f":
-			m.Viewport.HalfViewDown()
+			m.Viewport.HalfPageDown()
 		case "n":
 			action = "probe_new"
 		case "enter", "t":
@@ -282,8 +278,6 @@ func (m ManagerModel) Update(msg tea.Msg) (ManagerModel, tea.Cmd, string) {
 					m.ensureCursorVisible()
 				}
 			}
-		case "q":
-			action = "quit"
 		}
 	}
 
@@ -301,11 +295,7 @@ func (m ManagerModel) SelectedRecord() *db.ProviderRecord {
 func (m ManagerModel) View() string {
 	var sb strings.Builder
 
-	verStr := m.Version
-	if verStr == "" {
-		verStr = "v1.0.0"
-	}
-	header := styles.HeaderStyle.Render(fmt.Sprintf("⚡ LLM & Image AI Manager %s (Chat · Responses · Anthropic · Images)", verStr))
+	header := styles.HeaderStyle.Render(fmt.Sprintf("⚡ LLM & Image AI Manager %s (Chat · Responses · Anthropic · Images)", m.Version))
 	sb.WriteString(header + "\n\n")
 
 	if m.StatusMsg != "" {

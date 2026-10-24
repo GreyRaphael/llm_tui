@@ -7,6 +7,30 @@ import (
 	"testing"
 )
 
+func findRecordByID(t *testing.T, database *DB, id int64) *ProviderRecord {
+	t.Helper()
+	records, err := database.ListRecords()
+	if err != nil {
+		t.Fatalf("ListRecords failed: %v", err)
+	}
+	for i := range records {
+		if records[i].ID == id {
+			return &records[i]
+		}
+	}
+	t.Fatalf("record %d not found", id)
+	return nil
+}
+
+func getAPIKey(t *testing.T, database *DB, baseURL string) string {
+	t.Helper()
+	key, err := database.GetAPIKeyByBaseURL(baseURL)
+	if err != nil {
+		t.Fatalf("GetAPIKeyByBaseURL failed: %v", err)
+	}
+	return key
+}
+
 func TestProviderRecordCRUD(t *testing.T) {
 	database, err := InitDB(":memory:")
 	if err != nil {
@@ -33,19 +57,19 @@ func TestProviderRecordCRUD(t *testing.T) {
 	}
 
 	// 2. Test GetAPIKeyByBaseURL
-	key := database.GetAPIKeyByBaseURL("https://api.deepseek.com")
+	key := getAPIKey(t, database, "https://api.deepseek.com")
 	if key != "sk-test123" {
 		t.Errorf("expected API key 'sk-test123', got '%s'", key)
 	}
 
 	// Test variant base_url match (trailing slash)
-	keyVariant := database.GetAPIKeyByBaseURL("https://api.deepseek.com/")
+	keyVariant := getAPIKey(t, database, "https://api.deepseek.com/")
 	if keyVariant != "sk-test123" {
 		t.Errorf("expected API key 'sk-test123' for variant URL, got '%s'", keyVariant)
 	}
 
 	// Test /v1 variant base_url match
-	keyV1 := database.GetAPIKeyByBaseURL("https://api.deepseek.com/v1")
+	keyV1 := getAPIKey(t, database, "https://api.deepseek.com/v1")
 	if keyV1 != "sk-test123" {
 		t.Errorf("expected API key 'sk-test123' for /v1 variant URL, got '%s'", keyV1)
 	}
@@ -84,13 +108,10 @@ func TestProviderRecordCRUD(t *testing.T) {
 		t.Fatalf("expected 2 records, got %d", len(records))
 	}
 
-	// 5. Test GetByID
-	fetched, err := database.GetRecordByID(rec1.ID)
-	if err != nil {
-		t.Fatalf("GetRecordByID failed: %v", err)
-	}
+	// 5. Read the record back through the production list API.
+	fetched := findRecordByID(t, database, rec1.ID)
 	if fetched == nil || fetched.Model != "deepseek-chat" {
-		t.Fatalf("GetRecordByID got wrong record: %+v", fetched)
+		t.Fatalf("ListRecords returned wrong record: %+v", fetched)
 	}
 
 	// 6. Test Update
@@ -101,10 +122,7 @@ func TestProviderRecordCRUD(t *testing.T) {
 		t.Fatalf("UpdateRecord failed: %v", err)
 	}
 
-	updated, err := database.GetRecordByID(rec1.ID)
-	if err != nil {
-		t.Fatalf("GetRecordByID after update failed: %v", err)
-	}
+	updated := findRecordByID(t, database, rec1.ID)
 	if updated.Name != "DeepSeek Chat Updated" || updated.ReasoningEffort != ReasoningEffortLow {
 		t.Fatalf("Update record verification failed: %+v", updated)
 	}
@@ -143,18 +161,28 @@ func TestProviderRecordEmptyAPIKey(t *testing.T) {
 		t.Fatalf("CreateRecord with empty APIKey failed: %v", err)
 	}
 
-	fetched, err := database.GetRecordByID(rec.ID)
-	if err != nil {
-		t.Fatalf("GetRecordByID failed: %v", err)
-	}
+	fetched := findRecordByID(t, database, rec.ID)
 	if fetched.APIKey != "" {
 		t.Errorf("expected empty APIKey, got %q", fetched.APIKey)
 	}
 
 	// GetAPIKeyByBaseURL must not conflate an empty key with "no saved record".
 	// For now it returns "" for empty keys by design.
-	if key := database.GetAPIKeyByBaseURL("http://localhost:8080"); key != "" {
+	if key := getAPIKey(t, database, "http://localhost:8080"); key != "" {
 		t.Errorf("expected empty APIKey lookup, got %q", key)
+	}
+}
+
+func TestGetAPIKeyReportsDBErrors(t *testing.T) {
+	database, err := InitDB(":memory:")
+	if err != nil {
+		t.Fatalf("InitDB failed: %v", err)
+	}
+	if err := database.Close(); err != nil {
+		t.Fatalf("failed to close db: %v", err)
+	}
+	if _, err := database.GetAPIKeyByBaseURL("https://api.example.com"); err == nil {
+		t.Fatal("expected API key lookup to report the database error")
 	}
 }
 
@@ -306,4 +334,3 @@ func TestInitDBCreatesParentDir(t *testing.T) {
 		t.Fatalf("expected database file to exist at %s", nestedDBPath)
 	}
 }
-

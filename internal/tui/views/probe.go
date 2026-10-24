@@ -412,7 +412,12 @@ func (m *ProbeModel) checkAutofillAPIKey() {
 		return
 	}
 
-	existingKey := m.DB.GetAPIKeyByBaseURL(baseURL)
+	existingKey, err := m.DB.GetAPIKeyByBaseURL(baseURL)
+	if err != nil {
+		m.StatusMsg = fmt.Sprintf("Failed to load saved API Key: %v", err)
+		m.IsError = true
+		return
+	}
 	if existingKey == "" {
 		// The Base URL changed away from any saved record: don't leave a stale
 		// auto-filled key pointing at a different endpoint.

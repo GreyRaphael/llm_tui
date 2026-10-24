@@ -9,19 +9,12 @@ var (
 	ColorPrimary   = lipgloss.Color("#7D56F4") // Vibrant Purple
 	ColorSecondary = lipgloss.Color("#04B575") // Cyan Emerald
 	ColorAccent    = lipgloss.Color("#FF76A0") // Coral Pink
-	ColorBgDark    = lipgloss.Color("#1A1B26") // Soft Dark
-	ColorCardBg    = lipgloss.Color("#24283B") // Card Background
 	ColorText      = lipgloss.Color("#C0CAF5") // Crisp Off-white
 	ColorMuted     = lipgloss.Color("#565F89") // Muted Gray
 	ColorHighlight = lipgloss.Color("#E0AF68") // Warm Amber
 	ColorError     = lipgloss.Color("#F7768E") // Soft Red
 
 	// Base Styles
-	TitleStyle = lipgloss.NewStyle().
-			Bold(true).
-			Foreground(ColorPrimary).
-			MarginBottom(1)
-
 	SubtitleStyle = lipgloss.NewStyle().
 			Foreground(ColorSecondary).
 			Bold(true)

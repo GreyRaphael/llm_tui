@@ -77,9 +77,6 @@ var SupportedImageSizes = []ImageSizePreset{
 	{"8192x3504", "21:9", "4K", "8192×3504 (21:9 Ultrawide Cinematic - 4K Ultra-HD)"},
 }
 
-// Deprecated: Alias for backward compatibility
-var SupportedAspectRatios = SupportedImageSizes
-
 type TesterModel struct {
 	DB                     *db.DB
 	Record                 db.ProviderRecord
@@ -92,11 +89,9 @@ type TesterModel struct {
 	IsStreamMode           bool
 	SelectingModel         bool
 	SelectingAspectRatio   bool
-	SelectingSize          bool
 	DiscoveredModels       []string
 	ModelIndex             int
 	AspectRatioIndex       int
-	SizeIndex              int
 	LastResult             *api.TestResult
 	LatestSavedImage       string
 	CopyStatusMsg          string
@@ -304,28 +299,20 @@ func (m TesterModel) Update(msg tea.Msg) (TesterModel, tea.Cmd, string) {
 		}
 		return m.handleStreamChunk(msg.msg)
 
-	case api.StreamChunkMsg:
-		// Legacy direct entry point (also used by unit tests); it is treated as
-		// belonging to the current stream.
-		return m.handleStreamChunk(msg)
-
 	case tea.KeyMsg:
-		if m.SelectingAspectRatio || m.SelectingSize {
+		if m.SelectingAspectRatio {
 			switch msg.String() {
 			case "esc":
 				m.SelectingAspectRatio = false
-				m.SelectingSize = false
 				return m, nil, ""
 			case "up", "k":
 				if m.AspectRatioIndex > 0 {
 					m.AspectRatioIndex--
-					m.SizeIndex = m.AspectRatioIndex
 				}
 				return m, nil, ""
 			case "down", "j":
 				if m.AspectRatioIndex < len(SupportedImageSizes)-1 {
 					m.AspectRatioIndex++
-					m.SizeIndex = m.AspectRatioIndex
 				}
 				return m, nil, ""
 			case "enter":
@@ -356,7 +343,6 @@ func (m TesterModel) Update(msg tea.Msg) (TesterModel, tea.Cmd, string) {
 					}
 				}
 				m.SelectingAspectRatio = false
-				m.SelectingSize = false
 				return m, nil, ""
 			}
 			return m, nil, ""
@@ -424,7 +410,6 @@ func (m TesterModel) Update(msg tea.Msg) (TesterModel, tea.Cmd, string) {
 		case "alt+a":
 			if m.Record.APIType == api.APITypeOpenAIImages {
 				m.SelectingAspectRatio = true
-				m.SelectingSize = true
 				var payloadMap map[string]interface{}
 				if err := json.Unmarshal([]byte(m.Textarea.Value()), &payloadMap); err == nil {
 					currSize, hasSize := payloadMap["size"].(string)
@@ -432,11 +417,9 @@ func (m TesterModel) Update(msg tea.Msg) (TesterModel, tea.Cmd, string) {
 					for idx, opt := range SupportedImageSizes {
 						if hasSize && (opt.Size == currSize || strings.EqualFold(opt.Size, currSize)) {
 							m.AspectRatioIndex = idx
-							m.SizeIndex = idx
 							break
 						} else if !hasSize && opt.Ratio == currRatio {
 							m.AspectRatioIndex = idx
-							m.SizeIndex = idx
 							break
 						}
 					}
@@ -509,12 +492,12 @@ func (m TesterModel) Update(msg tea.Msg) (TesterModel, tea.Cmd, string) {
 		// Page Down / Page Up scrolling for Response Viewport
 		case "pgdown", "pagedown", "ctrl+f":
 			if m.ActivePane == PaneResponse {
-				m.Viewport.HalfViewDown()
+				m.Viewport.HalfPageDown()
 				return m, nil, ""
 			}
 		case "pgup", "pageup", "ctrl+b":
 			if m.ActivePane == PaneResponse {
-				m.Viewport.HalfViewUp()
+				m.Viewport.HalfPageUp()
 				return m, nil, ""
 			}
 
@@ -954,7 +937,7 @@ func (m TesterModel) View() string {
 	var leftTitle string
 	var leftContent string
 
-	if m.SelectingAspectRatio || m.SelectingSize {
+	if m.SelectingAspectRatio {
 		totalSizes := len(SupportedImageSizes)
 		leftBorderColor = styles.ColorAccent
 		leftTitle = fmt.Sprintf("📐 Select Image Size ([%d/%d] - ↑/↓ to move, Enter to apply, Esc to cancel)", m.AspectRatioIndex+1, totalSizes)

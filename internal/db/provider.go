@@ -99,45 +99,11 @@ func (d *DB) ListRecords() ([]ProviderRecord, error) {
 	return records, nil
 }
 
-// GetRecordByID retrieves a single provider record by ID
-func (d *DB) GetRecordByID(id int64) (*ProviderRecord, error) {
-	query := `
-	SELECT id, name, base_url, api_key, api_type, model, reasoning_effort, custom_payload, created_at, updated_at
-	FROM provider_records
-	WHERE id = ?;
-	`
-	row := d.QueryRow(query, id)
-	var rec ProviderRecord
-	var customPayload sql.NullString
-	err := row.Scan(
-		&rec.ID,
-		&rec.Name,
-		&rec.BaseURL,
-		&rec.APIKey,
-		&rec.APIType,
-		&rec.Model,
-		&rec.ReasoningEffort,
-		&customPayload,
-		&rec.CreatedAt,
-		&rec.UpdatedAt,
-	)
-	if err != nil {
-		if err == sql.ErrNoRows {
-			return nil, nil
-		}
-		return nil, fmt.Errorf("failed to query provider record by id: %w", err)
-	}
-	if customPayload.Valid {
-		rec.CustomPayload = customPayload.String
-	}
-	return &rec, nil
-}
-
-// GetAPIKeyByBaseURL searches existing provider records for a matching base_url and returns saved APIKey
-func (d *DB) GetAPIKeyByBaseURL(baseURL string) string {
+// GetAPIKeyByBaseURL searches existing provider records for a matching base_url.
+func (d *DB) GetAPIKeyByBaseURL(baseURL string) (string, error) {
 	raw := strings.TrimSpace(baseURL)
 	if raw == "" {
-		return ""
+		return "", nil
 	}
 	normTrim := strings.TrimRight(raw, "/")
 	withoutV1 := strings.TrimSuffix(normTrim, "/v1")
@@ -150,10 +116,13 @@ func (d *DB) GetAPIKeyByBaseURL(baseURL string) string {
 	`
 	var apiKey string
 	err := d.QueryRow(query, raw, normTrim, normTrim+"/", withoutV1, withV1).Scan(&apiKey)
-	if err == nil && apiKey != "" {
-		return apiKey
+	if err == sql.ErrNoRows {
+		return "", nil
 	}
-	return ""
+	if err != nil {
+		return "", fmt.Errorf("failed to look up API key by base URL: %w", err)
+	}
+	return apiKey, nil
 }
 
 // UpdateRecord updates an existing provider record

@@ -14,6 +14,13 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 )
 
+func updateStreamChunk(m TesterModel, msg api.StreamChunkMsg) (TesterModel, tea.Cmd, string) {
+	if m.requestID == 0 {
+		m.requestID = nextRequestID()
+	}
+	return m.Update(streamChunkMsg{id: m.requestID, msg: msg})
+}
+
 func TestMaskAPIKey(t *testing.T) {
 	tests := []struct {
 		input    string
@@ -52,7 +59,7 @@ func TestManagerModel_Navigation(t *testing.T) {
 		})
 	}
 
-	m := NewManagerModel(database)
+	m := NewManagerModel(database, "v-test")
 
 	if len(m.Records) != 3 {
 		t.Fatalf("expected 3 records, got %d", len(m.Records))
@@ -100,7 +107,7 @@ func TestManagerModel_DeleteConfirmation(t *testing.T) {
 		Model:   "gpt-4o",
 	})
 
-	m := NewManagerModel(database)
+	m := NewManagerModel(database, "v-test")
 	if len(m.Records) != 1 {
 		t.Fatalf("expected 1 record, got %d", len(m.Records))
 	}
@@ -154,7 +161,7 @@ func TestManagerModel_Actions(t *testing.T) {
 		Model:   "gpt-4o",
 	})
 
-	m := NewManagerModel(database)
+	m := NewManagerModel(database, "v-test")
 
 	// 'n' should return "probe_new" action
 	_, _, action := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'n'}})
@@ -167,12 +174,6 @@ func TestManagerModel_Actions(t *testing.T) {
 	if action != "open_tester" {
 		t.Errorf("expected action 'open_tester', got %q", action)
 	}
-
-	// 'q' should return "quit" action
-	_, _, action = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'q'}})
-	if action != "quit" {
-		t.Errorf("expected action 'quit', got %q", action)
-	}
 }
 
 func TestManagerModel_SelectedRecord(t *testing.T) {
@@ -182,7 +183,7 @@ func TestManagerModel_SelectedRecord(t *testing.T) {
 	}
 	defer database.Close()
 
-	m := NewManagerModel(database)
+	m := NewManagerModel(database, "v-test")
 
 	// Empty records: should return nil
 	if rec := m.SelectedRecord(); rec != nil {
@@ -520,13 +521,13 @@ func TestTesterModel_StreamMsgUpdate(t *testing.T) {
 	m.Resize(100, 30)
 
 	// Send reasoning chunk msg
-	m, _, _ = m.Update(api.StreamChunkMsg{
+	m, _, _ = updateStreamChunk(m, api.StreamChunkMsg{
 		StatusCode:     200,
 		ReasoningDelta: "Analyzing request... ",
 	})
 
 	// Send content chunk msg
-	m, _, _ = m.Update(api.StreamChunkMsg{
+	m, _, _ = updateStreamChunk(m, api.StreamChunkMsg{
 		ContentDelta:     "Hello World!",
 		PromptTokens:     10,
 		CompletionTokens: 20,
@@ -541,7 +542,7 @@ func TestTesterModel_StreamMsgUpdate(t *testing.T) {
 	}
 
 	// Send stream finish msg
-	m, _, _ = m.Update(api.StreamChunkMsg{
+	m, _, _ = updateStreamChunk(m, api.StreamChunkMsg{
 		Done: true,
 	})
 
@@ -612,7 +613,7 @@ func TestTesterModel_ViewportWordWrap(t *testing.T) {
 	m.Resize(60, 30) // viewport width will be around 24
 
 	longLine := "This is a very long line of text that exceeds the viewport width and must be automatically wrapped into multiple lines by Lipgloss reflow engine."
-	m, _, _ = m.Update(api.StreamChunkMsg{
+	m, _, _ = updateStreamChunk(m, api.StreamChunkMsg{
 		ContentDelta: longLine,
 	})
 
@@ -646,7 +647,7 @@ func TestTesterModel_MarkdownRendering(t *testing.T) {
 	m.Resize(80, 30)
 
 	markdownText := "# Header\n\n- Item 1\n- Item 2\n\n```python\nprint('hello')\n```"
-	m, _, _ = m.Update(api.StreamChunkMsg{
+	m, _, _ = updateStreamChunk(m, api.StreamChunkMsg{
 		ContentDelta: markdownText,
 		Done:         true,
 	})
@@ -706,6 +707,22 @@ func TestProbeModel_AutofillRespectsManualAPIKeyEdit(t *testing.T) {
 	m.checkAutofillAPIKey()
 	if got := m.APIKeyInput.Value(); got != "sk-user" {
 		t.Fatalf("manual key should be preserved, got %q", got)
+	}
+}
+
+func TestProbeModel_AutofillReportsDBError(t *testing.T) {
+	database, err := db.InitDB(":memory:")
+	if err != nil {
+		t.Fatalf("failed to init memory db: %v", err)
+	}
+	if err := database.Close(); err != nil {
+		t.Fatalf("failed to close db: %v", err)
+	}
+	m := NewProbeModel(database)
+	m.BaseURLInput.SetValue("https://api.example.com")
+	m.checkAutofillAPIKey()
+	if !m.IsError || !strings.Contains(m.StatusMsg, "Failed to load saved API Key") {
+		t.Fatalf("expected autofill DB error, got %q", m.StatusMsg)
 	}
 }
 
@@ -927,7 +944,7 @@ func TestManagerModel_ViewportScrolling(t *testing.T) {
 		})
 	}
 
-	m := NewManagerModel(database)
+	m := NewManagerModel(database, "v-test")
 	m.Resize(80, 15) // small height: viewport height is around 9 lines (holds ~1.5 cards)
 
 	if len(m.Records) != 10 {
@@ -987,7 +1004,7 @@ func TestTesterModel_StreamThrottling(t *testing.T) {
 	// Send rapid stream chunks
 	chunks := []string{"Hello", " world", " from", " throttled", " stream"}
 	for _, c := range chunks {
-		m, _, _ = m.Update(api.StreamChunkMsg{ContentDelta: c})
+		m, _, _ = updateStreamChunk(m, api.StreamChunkMsg{ContentDelta: c})
 	}
 
 	if m.ContentText != "Hello world from throttled stream" {
@@ -995,7 +1012,7 @@ func TestTesterModel_StreamThrottling(t *testing.T) {
 	}
 
 	// Finalize stream with Done: true
-	m, _, _ = m.Update(api.StreamChunkMsg{ContentDelta: "!", Done: true})
+	m, _, _ = updateStreamChunk(m, api.StreamChunkMsg{ContentDelta: "!", Done: true})
 	if m.IsExecuting {
 		t.Fatal("expected IsExecuting to be false after Done: true")
 	}
@@ -1139,7 +1156,7 @@ func TestProbeModel_DirectImageModelRouting(t *testing.T) {
 	m.SelectedModel = "gemini-3.1-flash-image"
 
 	// Press Enter on image model
-	m, _, action := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m, _, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
 
 	// Must directly skip StepProbing and land on StepSelectAPITypeAndName
 	if m.Step != StepSelectAPITypeAndName {
@@ -1153,7 +1170,7 @@ func TestProbeModel_DirectImageModelRouting(t *testing.T) {
 	}
 
 	// Press Enter to save record
-	m, _, action = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m, _, action := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	if action != "record_created" {
 		t.Fatalf("expected action record_created, got %q", action)
 	}
@@ -1196,8 +1213,8 @@ func TestTesterModel_AspectRatioSwitch(t *testing.T) {
 
 	// 2. Open Size switcher via Alt+A
 	m, _, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'a'}, Alt: true})
-	if !m.SelectingAspectRatio && !m.SelectingSize {
-		t.Fatal("expected SelectingAspectRatio or SelectingSize to be true after Alt+A")
+	if !m.SelectingAspectRatio {
+		t.Fatal("expected SelectingAspectRatio to be true after Alt+A")
 	}
 
 	menuView := m.View()
@@ -1214,8 +1231,8 @@ func TestTesterModel_AspectRatioSwitch(t *testing.T) {
 	}
 	m, _, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
 
-	if m.SelectingAspectRatio || m.SelectingSize {
-		t.Fatal("expected SelectingSize to be false after Enter")
+	if m.SelectingAspectRatio {
+		t.Fatal("expected SelectingAspectRatio to be false after Enter")
 	}
 	if !strings.Contains(m.Textarea.Value(), `"size"`) {
 		t.Errorf("expected payload to have size field, got: %s", m.Textarea.Value())
@@ -1351,7 +1368,7 @@ func TestManagerModel_DeleteNearBottomNoUISqueeze(t *testing.T) {
 		})
 	}
 
-	m := NewManagerModel(database)
+	m := NewManagerModel(database, "v-test")
 	termHeight := 24
 	m.Resize(80, termHeight)
 
@@ -1424,7 +1441,7 @@ func TestManagerModel_NarrowWidthCardWidth(t *testing.T) {
 		Model:   "gpt-4o",
 	})
 
-	m := NewManagerModel(database)
+	m := NewManagerModel(database, "v-test")
 	m.Resize(45, 20)
 
 	if m.Viewport.Width > 45 {
