@@ -554,6 +554,106 @@ data: {"response":{"id":"resp-1","output":[],"status":"completed","usage":{"inpu
 	}
 }
 
+func TestExecuteStreamRequestCompleteJSONResponses(t *testing.T) {
+	tests := []struct {
+		name          string
+		apiType       string
+		body          string
+		wantContent   string
+		wantReasoning string
+	}{
+		{
+			name:    "pretty chat completion",
+			apiType: APITypeOpenAIChat,
+			body: `{
+  "choices": [{"message": {"content": "hello chat", "reasoning_content": "chat thinking"}}],
+  "usage": {"prompt_tokens": 2, "completion_tokens": 3, "total_tokens": 5}
+}`,
+			wantContent:   "hello chat",
+			wantReasoning: "chat thinking",
+		},
+		{
+			name:          "compact responses completion",
+			apiType:       APITypeOpenAIResponses,
+			body:          `{"output":[{"type":"reasoning","summary":[{"type":"summary_text","text":"responses thinking"}]},{"type":"message","content":[{"type":"output_text","text":"hello responses"}]}],"usage":{"input_tokens":2,"output_tokens":3,"total_tokens":5}}`,
+			wantContent:   "hello responses",
+			wantReasoning: "responses thinking",
+		},
+		{
+			name:    "pretty responses completion",
+			apiType: APITypeOpenAIResponses,
+			body: `{
+  "output": [
+    {"type": "message", "content": [{"type": "output_text", "text": "pretty responses"}]}
+  ],
+  "usage": {"input_tokens": 2, "output_tokens": 3, "total_tokens": 5}
+}`,
+			wantContent: "pretty responses",
+		},
+		{
+			name:    "pretty Anthropic completion",
+			apiType: APITypeAnthropic,
+			body: `{
+  "content": [
+    {"type": "thinking", "thinking": "anthropic thinking"},
+    {"type": "text", "text": "hello anthropic"}
+  ],
+  "usage": {"input_tokens": 2, "output_tokens": 3}
+}`,
+			wantContent:   "hello anthropic",
+			wantReasoning: "anthropic thinking",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				_, _ = w.Write([]byte(tt.body))
+			}))
+			defer server.Close()
+
+			ch := make(chan StreamChunkMsg, 20)
+			go ExecuteStreamRequest(context.Background(), server.URL, "", tt.apiType, `{"stream":true}`, ch)
+			var content, reasoning string
+			var done bool
+			var prompt, completion, total int
+			for msg := range ch {
+				if msg.Err != nil {
+					t.Fatalf("unexpected stream error: %v", msg.Err)
+				}
+				content += msg.ContentDelta
+				reasoning += msg.ReasoningDelta
+				if msg.PromptTokens > 0 {
+					prompt = msg.PromptTokens
+				}
+				if msg.CompletionTokens > 0 {
+					completion = msg.CompletionTokens
+				}
+				if msg.TotalTokens > 0 {
+					total = msg.TotalTokens
+				}
+				done = done || msg.Done
+			}
+			if content != tt.wantContent || reasoning != tt.wantReasoning {
+				t.Fatalf("unexpected content/reasoning: %q / %q", content, reasoning)
+			}
+			if !done || prompt != 2 || completion != 3 || total != 5 {
+				t.Fatalf("unexpected completion state: done=%v usage=%d/%d/%d", done, prompt, completion, total)
+			}
+		})
+	}
+}
+
+func TestExecuteStreamRequestRejectsImageStreaming(t *testing.T) {
+	ch := make(chan StreamChunkMsg, 1)
+	ExecuteStreamRequest(context.Background(), "http://localhost", "", APITypeOpenAIImages, `{}`, ch)
+	msg, ok := <-ch
+	if !ok || !msg.Done || msg.Err == nil || !strings.Contains(msg.Err.Error(), "not supported") {
+		t.Fatalf("expected immediate image streaming error, got %+v", msg)
+	}
+}
+
 func TestExecuteRequestFallsBackToRootEndpoint(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {

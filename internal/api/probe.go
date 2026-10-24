@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"net"
 	"net/http"
 	"net/url"
@@ -182,11 +181,14 @@ func probeEndpoint(ctx context.Context, client *http.Client, urls []string, auth
 		if err != nil {
 			return false, "Connection error: " + err.Error()
 		}
-		body, _ := io.ReadAll(resp.Body)
-		_ = resp.Body.Close()
-
 		if resp.StatusCode == http.StatusOK {
+			_ = resp.Body.Close()
 			return true, "200 OK (Supported)"
+		}
+		body, readErr := readAllLimited(resp.Body, maxErrorBodyBytes)
+		_ = resp.Body.Close()
+		if readErr != nil {
+			return false, fmt.Sprintf("Response read error: %v", readErr)
 		}
 
 		bodyStr := string(body)
@@ -221,11 +223,14 @@ func probeEndpointAnthropic(ctx context.Context, client *http.Client, urls []str
 		if err != nil {
 			return false, "Connection error: " + err.Error()
 		}
-		body, _ := io.ReadAll(resp.Body)
-		_ = resp.Body.Close()
-
 		if resp.StatusCode == http.StatusOK {
+			_ = resp.Body.Close()
 			return true, "200 OK (Supported)"
+		}
+		body, readErr := readAllLimited(resp.Body, maxErrorBodyBytes)
+		_ = resp.Body.Close()
+		if readErr != nil {
+			return false, fmt.Sprintf("Response read error: %v", readErr)
 		}
 
 		bodyStr := string(body)
@@ -308,14 +313,15 @@ func FetchModels(ctx context.Context, baseURL, apiKey string) ([]string, error) 
 			}
 			continue
 		}
-		body, readErr := io.ReadAll(resp.Body)
+		if resp.StatusCode != http.StatusOK {
+			_ = resp.Body.Close()
+			requestErrors = append(requestErrors, fmt.Errorf("%s: HTTP %d", targetURL, resp.StatusCode))
+			continue
+		}
+		body, readErr := readAllLimited(resp.Body, maxModelsBodyBytes)
 		_ = resp.Body.Close()
 		if readErr != nil {
 			requestErrors = append(requestErrors, fmt.Errorf("%s: read response: %w", targetURL, readErr))
-			continue
-		}
-		if resp.StatusCode != http.StatusOK {
-			requestErrors = append(requestErrors, fmt.Errorf("%s: HTTP %d", targetURL, resp.StatusCode))
 			continue
 		}
 

@@ -99,6 +99,20 @@ func TestSaveImagesFromResponse(t *testing.T) {
 	}
 }
 
+func TestSaveImagesFromResponseReportsInvalidBase64(t *testing.T) {
+	defer os.RemoveAll("./generated_images")
+	paths, sanitized, err := SaveImagesFromResponse(`{"created":1,"data":[{"b64_json":"not-valid-base64!"}]}`, "broken image")
+	if err == nil {
+		t.Fatal("expected invalid base64 error")
+	}
+	if len(paths) != 0 {
+		t.Fatalf("expected no saved images, got %v", paths)
+	}
+	if strings.Contains(sanitized, "not-valid-base64!") {
+		t.Fatal("sanitized response must not echo invalid image data")
+	}
+}
+
 func TestOpenImageFileHeadless(t *testing.T) {
 	if runtime.GOOS != "linux" {
 		t.Skip("skipping Linux headless test on non-Linux platform")
@@ -127,5 +141,3 @@ func TestOpenImageFileHeadless(t *testing.T) {
 		t.Errorf("expected error message to mention saved file path, got: %v", err)
 	}
 }
-
-

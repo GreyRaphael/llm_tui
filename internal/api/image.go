@@ -59,6 +59,24 @@ func ExtractPromptFromPayload(payloadJSON string) string {
 	return "generated_image"
 }
 
+func decodeImageBase64(value string) ([]byte, error) {
+	encodings := []*base64.Encoding{
+		base64.StdEncoding,
+		base64.RawStdEncoding,
+		base64.URLEncoding,
+		base64.RawURLEncoding,
+	}
+	var err error
+	for _, encoding := range encodings {
+		var decoded []byte
+		decoded, err = encoding.DecodeString(value)
+		if err == nil {
+			return decoded, nil
+		}
+	}
+	return nil, err
+}
+
 // SaveImagesFromResponse extracts base64 images, writes them to ./generated_images/,
 // and returns the saved file paths and a truncated JSON representation for TUI display.
 func SaveImagesFromResponse(rawJSON string, prompt string) ([]string, string, error) {
@@ -86,6 +104,7 @@ func SaveImagesFromResponse(rawJSON string, prompt string) ([]string, string, er
 		URL       string `json:"url,omitempty"`
 	}
 	var sanitizedData []sanitizedItem
+	var decodeErrors []error
 
 	for i, item := range resp.Data {
 		b64Str := strings.TrimSpace(item.B64JSON)
@@ -94,19 +113,10 @@ func SaveImagesFromResponse(rawJSON string, prompt string) ([]string, string, er
 			b64Str = strings.ReplaceAll(b64Str, "\r", "")
 			b64Str = strings.ReplaceAll(b64Str, "\n", "")
 
-			imgBytes, err := base64.StdEncoding.DecodeString(b64Str)
+			imgBytes, err := decodeImageBase64(b64Str)
 			if err != nil {
-				// Try raw standard or URL decoding
-				imgBytes, err = base64.RawStdEncoding.DecodeString(b64Str)
-				if err != nil {
-					imgBytes, err = base64.URLEncoding.DecodeString(b64Str)
-					if err != nil {
-						imgBytes, err = base64.RawURLEncoding.DecodeString(b64Str)
-						if err != nil {
-							continue
-						}
-					}
-				}
+				decodeErrors = append(decodeErrors, fmt.Errorf("image %d: %w", i+1, err))
+				continue
 			}
 
 			// Detect image format from magic bytes
@@ -152,7 +162,10 @@ func SaveImagesFromResponse(rawJSON string, prompt string) ([]string, string, er
 	}
 	sanitizedJSON, err := json.MarshalIndent(sanitizedMap, "", "  ")
 	if err != nil {
-		return savedPaths, rawJSON, nil
+		return savedPaths, rawJSON, err
+	}
+	if len(decodeErrors) > 0 {
+		return savedPaths, string(sanitizedJSON), errors.Join(decodeErrors...)
 	}
 
 	return savedPaths, string(sanitizedJSON), nil

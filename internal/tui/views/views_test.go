@@ -1222,6 +1222,52 @@ func TestTesterModel_AspectRatioSwitch(t *testing.T) {
 	}
 }
 
+func TestTesterModel_ImageRequestsAlwaysUseNonStream(t *testing.T) {
+	database, err := db.InitDB(":memory:")
+	if err != nil {
+		t.Fatalf("failed to init memory db: %v", err)
+	}
+	defer database.Close()
+
+	rec := db.ProviderRecord{BaseURL: "http://localhost", APIType: api.APITypeOpenAIImages, Model: "image-model"}
+	if err := database.CreateRecord(&rec); err != nil {
+		t.Fatalf("failed to create record: %v", err)
+	}
+	m := NewTesterModel(database, rec)
+	m.Textarea.SetValue(`{"model":"image-model","prompt":"cat","stream":true}`)
+	m, _, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'s'}, Alt: true})
+	if !strings.Contains(m.CopyStatusMsg, "not applicable") || !strings.Contains(m.Textarea.Value(), `"stream":true`) {
+		t.Fatal("image stream toggle should be rejected without changing payload")
+	}
+
+	m, cmd, _ := m.Update(tea.KeyMsg{Type: tea.KeyCtrlS})
+	if cmd == nil || m.IsStreamMode {
+		t.Fatal("image request must use the non-stream execution path")
+	}
+	m.CancelRequests()
+}
+
+func TestTesterModel_ImageSizeDBErrorFeedback(t *testing.T) {
+	database, err := db.InitDB(":memory:")
+	if err != nil {
+		t.Fatalf("failed to init memory db: %v", err)
+	}
+	rec := db.ProviderRecord{BaseURL: "http://localhost", APIType: api.APITypeOpenAIImages, Model: "image-model"}
+	if err := database.CreateRecord(&rec); err != nil {
+		t.Fatalf("failed to create record: %v", err)
+	}
+	m := NewTesterModel(database, rec)
+	if err := database.Close(); err != nil {
+		t.Fatalf("failed to close db: %v", err)
+	}
+
+	m, _, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'a'}, Alt: true})
+	m, _, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if !strings.Contains(m.CopyStatusMsg, "Failed to save image size") {
+		t.Fatalf("expected image size DB error, got %q", m.CopyStatusMsg)
+	}
+}
+
 func TestManagerModel_FourAPITypesBadges(t *testing.T) {
 	database, err := db.InitDB(":memory:")
 	if err != nil {

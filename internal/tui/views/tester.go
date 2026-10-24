@@ -332,20 +332,28 @@ func (m TesterModel) Update(msg tea.Msg) (TesterModel, tea.Cmd, string) {
 				if m.AspectRatioIndex >= 0 && m.AspectRatioIndex < len(SupportedImageSizes) {
 					preset := SupportedImageSizes[m.AspectRatioIndex]
 					var payloadMap map[string]interface{}
-					if err := json.Unmarshal([]byte(m.Textarea.Value()), &payloadMap); err == nil {
-						payloadMap["size"] = preset.Size
-						delete(payloadMap, "aspect_ratio")
-						delete(payloadMap, "aspectRatio")
-						delete(payloadMap, "image_size")
-						delete(payloadMap, "imageSize")
-						delete(payloadMap, "_imageSize")
-						if buf, err := json.MarshalIndent(payloadMap, "", "  "); err == nil {
-							m.Textarea.SetValue(string(buf))
-						}
+					if err := json.Unmarshal([]byte(m.Textarea.Value()), &payloadMap); err != nil {
+						m.CopyStatusMsg = fmt.Sprintf("❌ Cannot change image size: invalid JSON payload: %v", err)
+						return m, nil, ""
 					}
+					payloadMap["size"] = preset.Size
+					delete(payloadMap, "aspect_ratio")
+					delete(payloadMap, "aspectRatio")
+					delete(payloadMap, "image_size")
+					delete(payloadMap, "imageSize")
+					delete(payloadMap, "_imageSize")
+					buf, err := json.MarshalIndent(payloadMap, "", "  ")
+					if err != nil {
+						m.CopyStatusMsg = fmt.Sprintf("❌ Cannot change image size: %v", err)
+						return m, nil, ""
+					}
+					m.Textarea.SetValue(string(buf))
 					m.Record.CustomPayload = m.Textarea.Value()
-					_ = m.DB.UpdateRecord(&m.Record)
-					m.CopyStatusMsg = fmt.Sprintf("📐 Changed size to '%s' (%s %s)", preset.Size, preset.Ratio, preset.Tier)
+					if err := m.DB.UpdateRecord(&m.Record); err != nil {
+						m.CopyStatusMsg = fmt.Sprintf("⚠️ Failed to save image size to DB: %v", err)
+					} else {
+						m.CopyStatusMsg = fmt.Sprintf("📐 Changed size to '%s' (%s %s)", preset.Size, preset.Ratio, preset.Tier)
+					}
 				}
 				m.SelectingAspectRatio = false
 				m.SelectingSize = false
@@ -551,6 +559,9 @@ func (m TesterModel) Update(msg tea.Msg) (TesterModel, tea.Cmd, string) {
 					isStream = true
 				}
 			}
+			if m.Record.APIType == api.APITypeOpenAIImages {
+				isStream = false
+			}
 			m.IsStreamMode = isStream
 			ctx, id := beginTrackedRequest(&m.cancelExecution, &m.requestID)
 
@@ -566,6 +577,10 @@ func (m TesterModel) Update(msg tea.Msg) (TesterModel, tea.Cmd, string) {
 			return m, tea.Batch(m.Spinner.Tick, m.runExecuteNonStreamCmd(ctx, id)), ""
 
 		case "alt+s":
+			if m.Record.APIType == api.APITypeOpenAIImages {
+				m.CopyStatusMsg = "Stream mode is not applicable to image generation"
+				return m, nil, ""
+			}
 			// Toggle stream parameter in payload JSON
 			var payloadMap map[string]interface{}
 			if err := json.Unmarshal([]byte(m.Textarea.Value()), &payloadMap); err == nil {

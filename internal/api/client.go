@@ -1,7 +1,6 @@
 package api
 
 import (
-	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -75,37 +74,28 @@ func doPostWithFallback(ctx context.Context, client *http.Client, urls []string,
 	return notFoundResp, nil
 }
 
-// ExecuteStreamRequest dispatches the test payload to target API endpoint and streams chunks over msgChan.
-// The caller-supplied ctx lets the TUI cancel an in-flight stream (e.g. when the user navigates away or
-// starts a new request); cancellation makes the goroutine exit promptly instead of leaking on a full channel.
-// A hard 120s cap is applied on top of the caller's context as a safety net.
+// ExecuteStreamRequest dispatches a payload and emits SSE deltas over msgChan.
+// Providers that answer a streaming request with a complete JSON body are handled
+// as one final delta, including pretty-printed JSON documents.
 func ExecuteStreamRequest(ctx context.Context, baseURL, apiKey, apiType, payloadJSON string, msgChan chan<- StreamChunkMsg) {
 	defer close(msgChan)
 
 	ctx, cancel := context.WithTimeout(ctx, 120*time.Second)
 	defer cancel()
 
+	if apiType == APITypeOpenAIImages {
+		sendChunk(ctx, msgChan, StreamChunkMsg{Err: fmt.Errorf("streaming is not supported for image generation"), Done: true})
+		return
+	}
 	norm := NormalizeURL(baseURL)
 	if norm == "" {
-		sendChunk(ctx, msgChan, StreamChunkMsg{Err: fmt.Errorf("Invalid Base URL"), Done: true})
+		sendChunk(ctx, msgChan, StreamChunkMsg{Err: fmt.Errorf("invalid base URL"), Done: true})
 		return
 	}
 
-	var endpointPath string
-	switch apiType {
-	case APITypeAnthropic:
-		endpointPath = "/messages"
-	case APITypeOpenAIResponses:
-		endpointPath = "/responses"
-	case APITypeOpenAIImages:
-		endpointPath = "/images/generations"
-	default:
-		endpointPath = "/chat/completions"
-	}
-
-	urls := BuildEndpointURLs(norm, endpointPath)
+	urls := BuildEndpointURLs(norm, endpointPathForAPIType(apiType))
 	if len(urls) == 0 {
-		sendChunk(ctx, msgChan, StreamChunkMsg{Err: fmt.Errorf("Failed to construct endpoint URL"), Done: true})
+		sendChunk(ctx, msgChan, StreamChunkMsg{Err: fmt.Errorf("failed to construct endpoint URL"), Done: true})
 		return
 	}
 
@@ -113,7 +103,6 @@ func ExecuteStreamRequest(ctx context.Context, baseURL, apiKey, apiType, payload
 	startTime := time.Now()
 	resp, err := doPostWithFallback(ctx, client, urls, apiType, apiKey, payloadJSON)
 	initialLatency := time.Since(startTime)
-
 	if resp == nil {
 		if err == nil {
 			err = fmt.Errorf("no reachable endpoint")
@@ -124,11 +113,19 @@ func ExecuteStreamRequest(ctx context.Context, baseURL, apiKey, apiType, payload
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		bodyBytes, _ := io.ReadAll(resp.Body)
-		bodyStr := decodeGBKIfNeeded(bodyBytes)
-		errSnippet := extractErrorMessage(bodyStr)
+		body, readErr := readAllLimited(resp.Body, maxErrorBodyBytes)
+		errSnippet := ""
+		if readErr != nil {
+			errSnippet = readErr.Error()
+		} else {
+			bodyStr := decodeGBKIfNeeded(body)
+			errSnippet = extractErrorMessage(bodyStr)
+			if errSnippet == "" {
+				errSnippet = bodyStr
+			}
+		}
 		if errSnippet == "" {
-			errSnippet = bodyStr
+			errSnippet = resp.Status
 		}
 		sendChunk(ctx, msgChan, StreamChunkMsg{
 			StatusCode: resp.StatusCode,
@@ -139,176 +136,85 @@ func ExecuteStreamRequest(ctx context.Context, baseURL, apiKey, apiType, payload
 		return
 	}
 
-	// Send initial HTTP status msg
-	if !sendChunk(ctx, msgChan, StreamChunkMsg{
-		StatusCode: resp.StatusCode,
-		Latency:    initialLatency,
-	}) {
+	if !sendChunk(ctx, msgChan, StreamChunkMsg{StatusCode: resp.StatusCode, Latency: initialLatency}) {
 		return
 	}
 
-	contentType := resp.Header.Get("Content-Type")
-	isSSEHeader := strings.Contains(contentType, "text/event-stream")
+	var usage streamUsage
+	handleChunk := func(chunk map[string]interface{}) bool {
+		usage.addChunk(chunk)
+		content, reasoning := extractStreamDelta(chunk)
+		if content == "" && reasoning == "" && usage.prompt == 0 && usage.completion == 0 {
+			return true
+		}
+		return sendChunk(ctx, msgChan, StreamChunkMsg{
+			ContentDelta:     content,
+			ReasoningDelta:   reasoning,
+			PromptTokens:     usage.prompt,
+			CompletionTokens: usage.completion,
+			TotalTokens:      usage.total,
+			Latency:          time.Since(startTime),
+		})
+	}
 
-	scanner := bufio.NewScanner(resp.Body)
-	buf := make([]byte, 64*1024)
-	scanner.Buffer(buf, 10*1024*1024)
-
-	var promptTokens, completionTokens, totalTokens int
-	var fullBodyBuilder strings.Builder
-
-	for scanner.Scan() {
+	isSSE := strings.Contains(resp.Header.Get("Content-Type"), "text/event-stream")
+	var body []byte
+	if !isSSE {
+		body, err = readAllLimited(resp.Body, maxResponseBodyBytes)
+		if err == nil {
+			isSSE = isSSEResponse(body)
+		}
+	}
+	if err == nil {
+		if isSSE {
+			reader := io.Reader(resp.Body)
+			if body != nil {
+				reader = bytes.NewReader(body)
+			}
+			err = consumeSSEStream(ctx, reader, handleChunk)
+		} else {
+			err = sendCompleteJSONChunk(ctx, body, msgChan, &usage, time.Since(startTime))
+		}
+	}
+	if err != nil {
 		if ctx.Err() != nil {
 			return
 		}
-		lineBytes := scanner.Bytes()
-		lineStr := decodeGBKIfNeeded(lineBytes)
-		fullBodyBuilder.WriteString(lineStr)
-		fullBodyBuilder.WriteString("\n")
-
-		trimmed := strings.TrimSpace(lineStr)
-		if !strings.HasPrefix(trimmed, "data:") {
-			if !isSSEHeader && (strings.HasPrefix(trimmed, "{") || strings.HasPrefix(trimmed, "[")) {
-				var generic map[string]interface{}
-				if err := json.Unmarshal([]byte(trimmed), &generic); err == nil {
-					res := &TestResult{}
-					extractTokenUsage([]byte(trimmed), res)
-					content, reasoning := extractContentAndReasoningFromJSON(generic)
-					if !sendChunk(ctx, msgChan, StreamChunkMsg{
-						ContentDelta:     content,
-						ReasoningDelta:   reasoning,
-						PromptTokens:     res.PromptTokens,
-						CompletionTokens: res.CompletionTokens,
-						TotalTokens:      res.TotalTokens,
-					}) {
-						return
-					}
-				}
-			}
-			continue
-		}
-
-		dataStr := strings.TrimSpace(strings.TrimPrefix(trimmed, "data:"))
-		if dataStr == "" {
-			continue
-		}
-		if dataStr == "[DONE]" {
-			break
-		}
-
-		var chunk map[string]interface{}
-		if err := json.Unmarshal([]byte(dataStr), &chunk); err != nil {
-			continue
-		}
-
-		// Extract Usage; OpenAI Responses API nests it under response.usage.
-		if usageMap, ok := chunk["usage"].(map[string]interface{}); ok {
-			extractTokenUsageFromMap(usageMap, &promptTokens, &completionTokens, &totalTokens)
-		} else if responseMap, ok := chunk["response"].(map[string]interface{}); ok {
-			if usageMap, ok := responseMap["usage"].(map[string]interface{}); ok {
-				extractTokenUsageFromMap(usageMap, &promptTokens, &completionTokens, &totalTokens)
-			}
-		}
-
-		var contentDelta, reasoningDelta string
-
-		// 1. OpenAI Chat API format
-		if choices, ok := chunk["choices"].([]interface{}); ok && len(choices) > 0 {
-			if choice, ok := choices[0].(map[string]interface{}); ok {
-				if delta, ok := choice["delta"].(map[string]interface{}); ok {
-					if c, ok := delta["content"].(string); ok {
-						contentDelta += c
-					}
-					if r, ok := delta["reasoning_content"].(string); ok {
-						reasoningDelta += r
-					} else if r, ok := delta["reasoning"].(string); ok {
-						reasoningDelta += r
-					}
-				}
-			}
-		}
-
-		// 2. Anthropic Messages API format
-		if typeVal, ok := chunk["type"].(string); ok {
-			switch typeVal {
-			case "content_block_delta":
-				if delta, ok := chunk["delta"].(map[string]interface{}); ok {
-					if deltaType, ok := delta["type"].(string); ok {
-						if deltaType == "text_delta" {
-							if text, ok := delta["text"].(string); ok {
-								contentDelta += text
-							}
-						} else if deltaType == "thinking_delta" {
-							if thinking, ok := delta["thinking"].(string); ok {
-								reasoningDelta += thinking
-							}
-						}
-					}
-				}
-			case "message_start":
-				if msgMap, ok := chunk["message"].(map[string]interface{}); ok {
-					if usageMap, ok := msgMap["usage"].(map[string]interface{}); ok {
-						if it, ok := usageMap["input_tokens"].(float64); ok {
-							promptTokens = int(it)
-						}
-					}
-				}
-			case "message_delta":
-				if usageMap, ok := chunk["usage"].(map[string]interface{}); ok {
-					if ot, ok := usageMap["output_tokens"].(float64); ok {
-						completionTokens = int(ot)
-					}
-				}
-			}
-		}
-
-		// 3. OpenAI Responses API Stream format
-		if typeVal, ok := chunk["type"].(string); ok {
-			switch typeVal {
-			case "response.text.delta", "response.output_text.delta":
-				if delta, ok := chunk["delta"].(string); ok {
-					contentDelta += delta
-				}
-			case "response.reasoning.delta", "response.reasoning_text.delta", "response.reasoning_summary_text.delta":
-				if delta, ok := chunk["delta"].(string); ok {
-					reasoningDelta += delta
-				}
-			}
-		}
-
-		if totalTokens == 0 {
-			totalTokens = promptTokens + completionTokens
-		}
-
-		if contentDelta != "" || reasoningDelta != "" || promptTokens > 0 || completionTokens > 0 {
-			if !sendChunk(ctx, msgChan, StreamChunkMsg{
-				ContentDelta:     contentDelta,
-				ReasoningDelta:   reasoningDelta,
-				PromptTokens:     promptTokens,
-				CompletionTokens: completionTokens,
-				TotalTokens:      totalTokens,
-				Latency:          time.Since(startTime),
-			}) {
-				return
-			}
-		}
-	}
-
-	if err := scanner.Err(); err != nil && err != io.EOF {
-		if !sendChunk(ctx, msgChan, StreamChunkMsg{Err: fmt.Errorf("Stream scanner error: %v", err), Done: true}) {
-			return
-		}
-	}
-
-	if !sendChunk(ctx, msgChan, StreamChunkMsg{
-		Done:             true,
-		Latency:          time.Since(startTime),
-		PromptTokens:     promptTokens,
-		CompletionTokens: completionTokens,
-		TotalTokens:      totalTokens,
-	}) {
+		sendChunk(ctx, msgChan, StreamChunkMsg{Err: fmt.Errorf("stream response error: %v", err), Done: true})
 		return
 	}
+
+	sendChunk(ctx, msgChan, StreamChunkMsg{
+		Done:             true,
+		Latency:          time.Since(startTime),
+		PromptTokens:     usage.prompt,
+		CompletionTokens: usage.completion,
+		TotalTokens:      usage.total,
+	})
+}
+
+func sendCompleteJSONChunk(ctx context.Context, body []byte, msgChan chan<- StreamChunkMsg, usage *streamUsage, latency time.Duration) error {
+	bodyStr := decodeGBKIfNeeded(body)
+	var response map[string]interface{}
+	if err := json.Unmarshal([]byte(bodyStr), &response); err != nil {
+		return fmt.Errorf("decode JSON response: %w", err)
+	}
+	usage.addChunk(response)
+	content, reasoning := extractContentAndReasoningFromJSON(response)
+	if content == "" && reasoning == "" {
+		content = FormatJSON(bodyStr)
+	}
+	if !sendChunk(ctx, msgChan, StreamChunkMsg{
+		ContentDelta:     content,
+		ReasoningDelta:   reasoning,
+		PromptTokens:     usage.prompt,
+		CompletionTokens: usage.completion,
+		TotalTokens:      usage.total,
+		Latency:          latency,
+	}) {
+		return ctx.Err()
+	}
+	return nil
 }
 
 // sendChunk delivers a chunk to the TUI without ever blocking forever: once the
@@ -362,10 +268,53 @@ func extractContentAndReasoningFromJSON(genericMap map[string]interface{}) (stri
 		}
 	}
 
+	// OpenAI Responses style
+	if output, ok := genericMap["output"].([]interface{}); ok {
+		for _, item := range output {
+			itemMap, ok := item.(map[string]interface{})
+			if !ok {
+				continue
+			}
+			itemType, _ := itemMap["type"].(string)
+			if itemType == "reasoning" {
+				if summary, ok := itemMap["summary"].([]interface{}); ok {
+					for _, part := range summary {
+						if partMap, ok := part.(map[string]interface{}); ok {
+							if text, ok := partMap["text"].(string); ok {
+								reasoning += text
+							}
+						}
+					}
+				}
+				continue
+			}
+			if parts, ok := itemMap["content"].([]interface{}); ok {
+				for _, part := range parts {
+					partMap, ok := part.(map[string]interface{})
+					if !ok {
+						continue
+					}
+					text, _ := partMap["text"].(string)
+					switch partMap["type"] {
+					case "output_text", "text":
+						content += text
+					case "reasoning_text":
+						reasoning += text
+					}
+				}
+			}
+		}
+	}
+	if content == "" {
+		if text, ok := genericMap["output_text"].(string); ok {
+			content = text
+		}
+	}
+
 	return content, reasoning
 }
 
-// ExecuteTestRequest dispatches the single-turn test payload to the target API endpoint and returns latency & token stats
+// ExecuteTestRequest dispatches the single-turn test payload and returns response metrics.
 func ExecuteTestRequest(ctx context.Context, baseURL, apiKey, apiType, payloadJSON string) *TestResult {
 	norm := NormalizeURL(baseURL)
 	res := &TestResult{}
@@ -375,19 +324,7 @@ func ExecuteTestRequest(ctx context.Context, baseURL, apiKey, apiType, payloadJS
 		return res
 	}
 
-	var endpointPath string
-	switch apiType {
-	case APITypeAnthropic:
-		endpointPath = "/messages"
-	case APITypeOpenAIResponses:
-		endpointPath = "/responses"
-	case APITypeOpenAIImages:
-		endpointPath = "/images/generations"
-	default:
-		endpointPath = "/chat/completions"
-	}
-
-	urls := BuildEndpointURLs(norm, endpointPath)
+	urls := BuildEndpointURLs(norm, endpointPathForAPIType(apiType))
 	if len(urls) == 0 {
 		res.Error = "Failed to construct endpoint URL"
 		return res
@@ -411,7 +348,7 @@ func ExecuteTestRequest(ctx context.Context, baseURL, apiKey, apiType, payloadJS
 	defer resp.Body.Close()
 
 	res.StatusCode = resp.StatusCode
-	bodyBytes, err := io.ReadAll(resp.Body)
+	bodyBytes, err := readAllLimited(resp.Body, maxResponseBodyBytes)
 	if err != nil {
 		res.Error = "Failed to read response body: " + err.Error()
 		return res
@@ -444,12 +381,19 @@ func ExecuteTestRequest(ctx context.Context, baseURL, apiKey, apiType, payloadJS
 		res.FormattedBody = FormatJSON(res.RawBody)
 	}
 
-	// For OpenAI Images API, automatically decode Base64 and write image files to ./generated_images/
+	// For OpenAI Images API, automatically decode Base64 and write image files to ./generated_images/.
 	if apiType == APITypeOpenAIImages && res.StatusCode == http.StatusOK && !isErrorJSON {
 		prompt := ExtractPromptFromPayload(payloadJSON)
-		savedPaths, sanitizedBody, err := SaveImagesFromResponse(res.RawBody, prompt)
-		if err == nil {
-			res.SavedImages = savedPaths
+		savedPaths, sanitizedBody, saveErr := SaveImagesFromResponse(res.RawBody, prompt)
+		res.SavedImages = savedPaths
+		switch {
+		case saveErr != nil && sanitizedBody != res.RawBody:
+			res.FormattedBody = sanitizedBody
+			res.Error = fmt.Sprintf("failed to process image response: %v", saveErr)
+		case saveErr != nil:
+			res.FormattedBody = fmt.Sprintf("Image processing failed: %v", saveErr)
+			res.Error = fmt.Sprintf("failed to process image response: %v", saveErr)
+		default:
 			res.FormattedBody = sanitizedBody
 		}
 	}
@@ -501,8 +445,14 @@ func unescapeForDisplay(s string) string {
 }
 
 func isSSEResponse(body []byte) bool {
-	s := string(body)
-	return strings.Contains(s, "data:") || strings.Contains(s, "Original Response: data:")
+	for _, line := range strings.Split(string(body), "\n") {
+		trimmed := strings.TrimSpace(line)
+		if strings.HasPrefix(trimmed, "data:") ||
+			(strings.HasPrefix(trimmed, "Original Response:") && strings.Contains(trimmed, "data:")) {
+			return true
+		}
+	}
+	return false
 }
 
 func assembleSSEResponse(body []byte, res *TestResult) string {
@@ -516,58 +466,40 @@ func assembleSSEResponse(body []byte, res *TestResult) string {
 	lines := strings.Split(bodyStr, "\n")
 	var contentBuilder strings.Builder
 	var reasoningBuilder strings.Builder
+	var usage streamUsage
 	var lastModel string
 	var lastID string
 
 	for _, line := range lines {
-		line = strings.TrimSpace(line)
-		if !strings.HasPrefix(line, "data:") {
+		chunk, done, ok := parseSSELine(line)
+		if done {
+			break
+		}
+		if !ok {
 			continue
 		}
-		dataStr := strings.TrimSpace(strings.TrimPrefix(line, "data:"))
-		if dataStr == "" || dataStr == "[DONE]" {
-			continue
-		}
-
-		var chunk map[string]interface{}
-		if err := json.Unmarshal([]byte(dataStr), &chunk); err != nil {
-			continue
-		}
-
 		if m, ok := chunk["model"].(string); ok && m != "" {
 			lastModel = m
 		}
 		if id, ok := chunk["id"].(string); ok && id != "" {
 			lastID = id
 		}
-
-		// Extract usage if present in chunk
-		if usageMap, ok := chunk["usage"].(map[string]interface{}); ok {
-			if pt, ok := usageMap["prompt_tokens"].(float64); ok {
-				res.PromptTokens = int(pt)
+		if response, ok := chunk["response"].(map[string]interface{}); ok {
+			if m, ok := response["model"].(string); ok && m != "" {
+				lastModel = m
 			}
-			if ct, ok := usageMap["completion_tokens"].(float64); ok {
-				res.CompletionTokens = int(ct)
-			}
-			if tt, ok := usageMap["total_tokens"].(float64); ok {
-				res.TotalTokens = int(tt)
+			if id, ok := response["id"].(string); ok && id != "" {
+				lastID = id
 			}
 		}
-
-		// Extract delta text & reasoning_content
-		if choices, ok := chunk["choices"].([]interface{}); ok && len(choices) > 0 {
-			if choice, ok := choices[0].(map[string]interface{}); ok {
-				if delta, ok := choice["delta"].(map[string]interface{}); ok {
-					if c, ok := delta["content"].(string); ok {
-						contentBuilder.WriteString(c)
-					}
-					if r, ok := delta["reasoning_content"].(string); ok {
-						reasoningBuilder.WriteString(r)
-					}
-				}
-			}
-		}
+		usage.addChunk(chunk)
+		content, reasoning := extractStreamDelta(chunk)
+		contentBuilder.WriteString(content)
+		reasoningBuilder.WriteString(reasoning)
 	}
+	res.PromptTokens = usage.prompt
+	res.CompletionTokens = usage.completion
+	res.TotalTokens = usage.total
 
 	assembledMap := map[string]interface{}{
 		"id":     lastID,
@@ -638,31 +570,13 @@ func extractTokenUsage(body []byte, res *TestResult) {
 		}
 	}
 
-	// Check standard OpenAI style: "usage": { "prompt_tokens": 10, "completion_tokens": 20, "total_tokens": 30 }
-	if usage, ok := genericMap["usage"].(map[string]interface{}); ok {
-		if pt, ok := usage["prompt_tokens"].(float64); ok {
-			res.PromptTokens = int(pt)
-		}
-		if ct, ok := usage["completion_tokens"].(float64); ok {
-			res.CompletionTokens = int(ct)
-		}
-		if tt, ok := usage["total_tokens"].(float64); ok {
-			res.TotalTokens = int(tt)
-		}
-
-		// Check Anthropic style inside usage: "input_tokens": 10, "output_tokens": 20
-		if res.PromptTokens == 0 {
-			if it, ok := usage["input_tokens"].(float64); ok {
-				res.PromptTokens = int(it)
-			}
-		}
-		if res.CompletionTokens == 0 {
-			if ot, ok := usage["output_tokens"].(float64); ok {
-				res.CompletionTokens = int(ot)
-			}
-		}
-		if res.TotalTokens == 0 {
-			res.TotalTokens = res.PromptTokens + res.CompletionTokens
-		}
+	usage := streamUsage{
+		prompt:     res.PromptTokens,
+		completion: res.CompletionTokens,
+		total:      res.TotalTokens,
 	}
+	usage.addChunk(genericMap)
+	res.PromptTokens = usage.prompt
+	res.CompletionTokens = usage.completion
+	res.TotalTokens = usage.total
 }
