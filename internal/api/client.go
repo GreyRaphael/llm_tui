@@ -29,19 +29,23 @@ func setAuthHeaders(h http.Header, apiType, apiKey string) {
 	}
 }
 
-// doPostWithFallback posts the payload to each candidate endpoint URL in order
-// and returns the first successful (200) response. It mirrors probeEndpoint's
-// fallback behavior so that a provider verified via a fallback URL during the
-// setup wizard remains reachable from the Chat Laboratory (which previously
-// only tried urls[0]).
+// doPostWithFallback tries the next candidate URL only when the current endpoint
+// does not exist. Other responses and transport errors are returned immediately:
+// replaying a non-idempotent POST could duplicate a completion or image request.
 func doPostWithFallback(ctx context.Context, client *http.Client, urls []string, apiType, apiKey, payloadJSON string) (*http.Response, error) {
-	var bestResp *http.Response
-	var lastErr error
+	var notFoundResp *http.Response
+	closeNotFound := func() {
+		if notFoundResp != nil {
+			_ = notFoundResp.Body.Close()
+			notFoundResp = nil
+		}
+	}
+
 	for _, targetURL := range urls {
-		req, err := http.NewRequestWithContext(ctx, "POST", targetURL, bytes.NewBufferString(payloadJSON))
+		req, err := http.NewRequestWithContext(ctx, http.MethodPost, targetURL, bytes.NewBufferString(payloadJSON))
 		if err != nil {
-			lastErr = err
-			continue
+			closeNotFound()
+			return nil, err
 		}
 		req.Header.Set("Content-Type", "application/json")
 		req.Header.Set("Accept", "text/event-stream")
@@ -52,30 +56,23 @@ func doPostWithFallback(ctx context.Context, client *http.Client, urls []string,
 
 		resp, err := client.Do(req)
 		if err != nil {
-			lastErr = err
-			continue
+			closeNotFound()
+			return nil, err
 		}
 		if resp.StatusCode == http.StatusOK {
-			if bestResp != nil {
-				bestResp.Body.Close()
-			}
+			closeNotFound()
 			return resp, nil
 		}
-
-		// Keep the most informative error response (e.g. non-404 error like 400/429/500 over fallback 404)
-		if bestResp == nil {
-			bestResp = resp
-		} else if bestResp.StatusCode == http.StatusNotFound && resp.StatusCode != http.StatusNotFound {
-			bestResp.Body.Close()
-			bestResp = resp
-		} else {
-			resp.Body.Close()
+		if resp.StatusCode == http.StatusNotFound {
+			closeNotFound()
+			notFoundResp = resp
+			continue
 		}
+
+		closeNotFound()
+		return resp, nil
 	}
-	if bestResp != nil {
-		return bestResp, nil
-	}
-	return nil, lastErr
+	return notFoundResp, nil
 }
 
 // ExecuteStreamRequest dispatches the test payload to target API endpoint and streams chunks over msgChan.

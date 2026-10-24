@@ -590,6 +590,56 @@ func TestExecuteStreamFallsBackToRootEndpoint(t *testing.T) {
 	}
 }
 
+func TestExecuteRequestDoesNotFallbackAfterHTTPError(t *testing.T) {
+	for _, status := range []int{http.StatusBadRequest, http.StatusUnauthorized, http.StatusTooManyRequests, http.StatusInternalServerError} {
+		t.Run(fmt.Sprintf("status_%d", status), func(t *testing.T) {
+			var requests int32
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				atomic.AddInt32(&requests, 1)
+				if r.URL.Path == "/v1/chat/completions" {
+					w.WriteHeader(status)
+					return
+				}
+				w.WriteHeader(http.StatusOK)
+			}))
+			defer server.Close()
+
+			res := ExecuteTestRequest(server.URL, "", APITypeOpenAIChat, `{"model":"test"}`)
+			if res.StatusCode != status {
+				t.Fatalf("expected original HTTP status %d, got %d", status, res.StatusCode)
+			}
+			if got := atomic.LoadInt32(&requests); got != 1 {
+				t.Fatalf("expected one non-idempotent request, got %d", got)
+			}
+		})
+	}
+}
+
+func TestProbeDoesNotFallbackAfterHTTPError(t *testing.T) {
+	var requests int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt32(&requests, 1)
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer server.Close()
+
+	urls := []string{server.URL + "/v1/chat/completions", server.URL + "/chat/completions"}
+	if supported, _ := probeEndpoint(context.Background(), server.Client(), urls, "Authorization", "", nil); supported {
+		t.Fatal("expected failed probe")
+	}
+	if got := atomic.LoadInt32(&requests); got != 1 {
+		t.Fatalf("expected one OpenAI probe request, got %d", got)
+	}
+
+	atomic.StoreInt32(&requests, 0)
+	if supported, _ := probeEndpointAnthropic(context.Background(), server.Client(), urls, "", nil); supported {
+		t.Fatal("expected failed Anthropic probe")
+	}
+	if got := atomic.LoadInt32(&requests); got != 1 {
+		t.Fatalf("expected one Anthropic probe request, got %d", got)
+	}
+}
+
 func TestExecuteRequestRejectsUnreachableEndpoint(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusNotFound)

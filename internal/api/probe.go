@@ -180,9 +180,9 @@ func ProbeProvider(baseURL, apiKey string) (*ProbeResult, error) {
 func probeEndpoint(ctx context.Context, client *http.Client, urls []string, authHeader, authVal string, payload []byte) (bool, string) {
 	var lastStatus string
 	for _, targetURL := range urls {
-		req, err := http.NewRequestWithContext(ctx, "POST", targetURL, bytes.NewReader(payload))
+		req, err := http.NewRequestWithContext(ctx, http.MethodPost, targetURL, bytes.NewReader(payload))
 		if err != nil {
-			continue
+			return false, err.Error()
 		}
 		req.Header.Set("Content-Type", "application/json")
 		if strings.TrimSpace(authVal) != "" {
@@ -191,8 +191,7 @@ func probeEndpoint(ctx context.Context, client *http.Client, urls []string, auth
 
 		resp, err := client.Do(req)
 		if err != nil {
-			lastStatus = "Connection error: " + err.Error()
-			continue
+			return false, "Connection error: " + err.Error()
 		}
 		body, _ := io.ReadAll(resp.Body)
 		_ = resp.Body.Close()
@@ -208,7 +207,9 @@ func probeEndpoint(ctx context.Context, client *http.Client, urls []string, auth
 		} else {
 			errSnippet = fmt.Sprintf("%d %s", resp.StatusCode, errSnippet)
 		}
-
+		if resp.StatusCode != http.StatusNotFound {
+			return false, errSnippet
+		}
 		lastStatus = errSnippet
 	}
 	return false, lastStatus
@@ -217,9 +218,9 @@ func probeEndpoint(ctx context.Context, client *http.Client, urls []string, auth
 func probeEndpointAnthropic(ctx context.Context, client *http.Client, urls []string, apiKey string, payload []byte) (bool, string) {
 	var lastStatus string
 	for _, targetURL := range urls {
-		req, err := http.NewRequestWithContext(ctx, "POST", targetURL, bytes.NewReader(payload))
+		req, err := http.NewRequestWithContext(ctx, http.MethodPost, targetURL, bytes.NewReader(payload))
 		if err != nil {
-			continue
+			return false, err.Error()
 		}
 		req.Header.Set("Content-Type", "application/json")
 		req.Header.Set("anthropic-version", "2023-06-01")
@@ -229,8 +230,7 @@ func probeEndpointAnthropic(ctx context.Context, client *http.Client, urls []str
 
 		resp, err := client.Do(req)
 		if err != nil {
-			lastStatus = "Connection error: " + err.Error()
-			continue
+			return false, "Connection error: " + err.Error()
 		}
 		body, _ := io.ReadAll(resp.Body)
 		_ = resp.Body.Close()
@@ -246,7 +246,9 @@ func probeEndpointAnthropic(ctx context.Context, client *http.Client, urls []str
 		} else {
 			errSnippet = fmt.Sprintf("%d %s", resp.StatusCode, errSnippet)
 		}
-
+		if resp.StatusCode != http.StatusNotFound {
+			return false, errSnippet
+		}
 		lastStatus = errSnippet
 	}
 	return false, lastStatus
