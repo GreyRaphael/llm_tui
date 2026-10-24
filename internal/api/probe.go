@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -72,8 +73,11 @@ func BuildEndpointURLs(baseURL, endpointPath string) []string {
 }
 
 // ProbeProviderWithModel auto-detects supported API types for a base URL and API key using a specified model name
-func ProbeProviderWithModel(baseURL, apiKey, modelName string) (*ProbeResult, error) {
+func ProbeProviderWithModel(ctx context.Context, baseURL, apiKey, modelName string) (*ProbeResult, error) {
 	norm := NormalizeURL(baseURL)
+	if norm == "" {
+		return nil, fmt.Errorf("invalid base URL")
+	}
 	result := &ProbeResult{
 		BaseURL:         norm,
 		APIKey:          apiKey,
@@ -84,7 +88,7 @@ func ProbeProviderWithModel(baseURL, apiKey, modelName string) (*ProbeResult, er
 		modelName = "gpt-4o"
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 35*time.Second)
+	ctx, cancel := context.WithTimeout(ctx, 35*time.Second)
 	defer cancel()
 
 	client := &http.Client{Timeout: 30 * time.Second}
@@ -160,21 +164,6 @@ func ProbeProviderWithModel(baseURL, apiKey, modelName string) (*ProbeResult, er
 	wg.Wait()
 
 	return result, nil
-}
-
-// ProbeProvider is a backwards-compatible wrapper that fetches models first then probes
-func ProbeProvider(baseURL, apiKey string) (*ProbeResult, error) {
-	norm := NormalizeURL(baseURL)
-	discoveredModels, _ := FetchModels(norm, apiKey)
-	modelToUse := "gpt-4o"
-	if len(discoveredModels) > 0 {
-		modelToUse = discoveredModels[0]
-	}
-	res, err := ProbeProviderWithModel(baseURL, apiKey, modelToUse)
-	if res != nil {
-		res.DiscoveredModels = discoveredModels
-	}
-	return res, err
 }
 
 func probeEndpoint(ctx context.Context, client *http.Client, urls []string, authHeader, authVal string, payload []byte) (bool, string) {
@@ -280,25 +269,29 @@ func truncateRunes(s string, maxLen int) string {
 	return s
 }
 
-// FetchModels tries to query /models or /v1/models to retrieve available model IDs
-func FetchModels(baseURL, apiKey string) ([]string, error) {
+// FetchModels tries to query /models or /v1/models to retrieve available model IDs.
+func FetchModels(ctx context.Context, baseURL, apiKey string) ([]string, error) {
 	norm := NormalizeURL(baseURL)
 	if norm == "" {
-		return nil, nil
+		return nil, fmt.Errorf("invalid base URL")
 	}
 
+	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
+	defer cancel()
+
 	urls := BuildEndpointURLs(norm, "/models")
-	// Some gateways (e.g. https://api.deepseek.com/xxx) only serve the
-	// OpenAI-style model list at the root base rather than under a path prefix.
-	// Try the prefix-specific URLs first, then fall back to the root base.
+	// Some gateways only serve the model list at the root base rather than under
+	// a path prefix. Try prefix-specific URLs first, then the root base.
 	if root := rootBaseURL(norm); root != "" && root != norm {
 		urls = append(urls, BuildEndpointURLs(root, "/models")...)
 	}
-	client := &http.Client{Timeout: 15 * time.Second}
+	client := &http.Client{}
+	var requestErrors []error
 
 	for _, targetURL := range urls {
-		req, err := http.NewRequest("GET", targetURL, nil)
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, targetURL, nil)
 		if err != nil {
+			requestErrors = append(requestErrors, fmt.Errorf("%s: %w", targetURL, err))
 			continue
 		}
 		if strings.TrimSpace(apiKey) != "" {
@@ -309,29 +302,47 @@ func FetchModels(baseURL, apiKey string) ([]string, error) {
 
 		resp, err := client.Do(req)
 		if err != nil {
+			requestErrors = append(requestErrors, fmt.Errorf("%s: %w", targetURL, err))
+			if ctx.Err() != nil {
+				break
+			}
 			continue
 		}
-		body, err := io.ReadAll(resp.Body)
+		body, readErr := io.ReadAll(resp.Body)
 		_ = resp.Body.Close()
-		if err != nil || resp.StatusCode != http.StatusOK {
+		if readErr != nil {
+			requestErrors = append(requestErrors, fmt.Errorf("%s: read response: %w", targetURL, readErr))
+			continue
+		}
+		if resp.StatusCode != http.StatusOK {
+			requestErrors = append(requestErrors, fmt.Errorf("%s: HTTP %d", targetURL, resp.StatusCode))
 			continue
 		}
 
 		var parsed ModelsResponse
-		if err := json.Unmarshal(body, &parsed); err == nil && len(parsed.Data) > 0 {
-			var models []string
-			for _, m := range parsed.Data {
-				if m.ID != "" {
-					models = append(models, m.ID)
-				}
-			}
-			if len(models) > 0 {
-				sort.Strings(models)
-				return models, nil
+		if err := json.Unmarshal(body, &parsed); err != nil {
+			requestErrors = append(requestErrors, fmt.Errorf("%s: decode model list: %w", targetURL, err))
+			continue
+		}
+		var models []string
+		for _, m := range parsed.Data {
+			if m.ID != "" {
+				models = append(models, m.ID)
 			}
 		}
+		if len(models) > 0 {
+			sort.Strings(models)
+			return models, nil
+		}
+		requestErrors = append(requestErrors, fmt.Errorf("%s: empty model list", targetURL))
 	}
-	return nil, nil
+	if ctx.Err() != nil {
+		return nil, ctx.Err()
+	}
+	if len(requestErrors) > 0 {
+		return nil, errors.Join(requestErrors...)
+	}
+	return nil, fmt.Errorf("no model endpoints available for %s", norm)
 }
 
 // rootBaseURL returns the scheme://host portion of a normalized base URL.

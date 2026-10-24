@@ -366,7 +366,7 @@ func extractContentAndReasoningFromJSON(genericMap map[string]interface{}) (stri
 }
 
 // ExecuteTestRequest dispatches the single-turn test payload to the target API endpoint and returns latency & token stats
-func ExecuteTestRequest(baseURL, apiKey, apiType, payloadJSON string) *TestResult {
+func ExecuteTestRequest(ctx context.Context, baseURL, apiKey, apiType, payloadJSON string) *TestResult {
 	norm := NormalizeURL(baseURL)
 	res := &TestResult{}
 
@@ -393,7 +393,7 @@ func ExecuteTestRequest(baseURL, apiKey, apiType, payloadJSON string) *TestResul
 		return res
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+	ctx, cancel := context.WithTimeout(ctx, 90*time.Second)
 	defer cancel()
 
 	client := &http.Client{}

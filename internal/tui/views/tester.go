@@ -81,35 +81,32 @@ var SupportedImageSizes = []ImageSizePreset{
 var SupportedAspectRatios = SupportedImageSizes
 
 type TesterModel struct {
-	DB                   *db.DB
-	Record               db.ProviderRecord
-	ReasoningEffort      string
-	Textarea             textarea.Model
-	Viewport             viewport.Model
-	Spinner              spinner.Model
-	ActivePane           ActivePane
-	IsExecuting          bool
-	IsStreamMode         bool
-	SelectingModel       bool
-	SelectingAspectRatio bool
-	SelectingSize        bool
-	DiscoveredModels     []string
-	ModelIndex           int
-	AspectRatioIndex     int
-	SizeIndex            int
-	LastResult           *api.TestResult
-	LatestSavedImage     string
-	CopyStatusMsg        string
-	Width                int
-	Height               int
-	StreamChan       chan api.StreamChunkMsg
-	// StreamID is bumped on every stream request send; each streamed chunk is
-	// tagged with the id of the request it belongs to so stale chunks from a
-	// superseded request are dropped instead of polluting the current stream.
-	StreamID int
-	// CancelStream cancels the in-flight stream request so its goroutine and
-	// HTTP connection are released when the user navigates away or quits.
-	CancelStream           context.CancelFunc
+	DB                     *db.DB
+	Record                 db.ProviderRecord
+	ReasoningEffort        string
+	Textarea               textarea.Model
+	Viewport               viewport.Model
+	Spinner                spinner.Model
+	ActivePane             ActivePane
+	IsExecuting            bool
+	IsStreamMode           bool
+	SelectingModel         bool
+	SelectingAspectRatio   bool
+	SelectingSize          bool
+	DiscoveredModels       []string
+	ModelIndex             int
+	AspectRatioIndex       int
+	SizeIndex              int
+	LastResult             *api.TestResult
+	LatestSavedImage       string
+	CopyStatusMsg          string
+	Width                  int
+	Height                 int
+	StreamChan             chan api.StreamChunkMsg
+	requestID              uint64
+	cancelExecution        context.CancelFunc
+	modelsRequestID        uint64
+	cancelModels           context.CancelFunc
 	ReasoningText          string
 	ContentText            string
 	StreamStatusCode       int
@@ -123,10 +120,12 @@ type TesterModel struct {
 }
 
 type executeFinishedMsg struct {
+	id     uint64
 	result *api.TestResult
 }
 
 type testerModelsFetchedMsg struct {
+	id     uint64
 	models []string
 	err    error
 }
@@ -136,7 +135,7 @@ type testerModelsFetchedMsg struct {
 // (which may be blocked reading an old channel), a stale chunk can be delivered
 // after a new request starts; the id lets the model drop it.
 type streamChunkMsg struct {
-	id  int
+	id  uint64
 	msg api.StreamChunkMsg
 }
 
@@ -250,8 +249,9 @@ func (m *TesterModel) Resize(w, h int) {
 	}
 }
 
-func (m TesterModel) Init() tea.Cmd {
-	return tea.Batch(textarea.Blink, m.runFetchModelsCmd())
+func (m *TesterModel) Init() tea.Cmd {
+	ctx, id := beginTrackedRequest(&m.cancelModels, &m.modelsRequestID)
+	return tea.Batch(textarea.Blink, m.runFetchModelsCmd(ctx, id))
 }
 
 func (m TesterModel) Update(msg tea.Msg) (TesterModel, tea.Cmd, string) {
@@ -260,6 +260,13 @@ func (m TesterModel) Update(msg tea.Msg) (TesterModel, tea.Cmd, string) {
 
 	switch msg := msg.(type) {
 	case testerModelsFetchedMsg:
+		if !finishTrackedRequest(&m.cancelModels, &m.modelsRequestID, msg.id) {
+			return m, nil, ""
+		}
+		if msg.err != nil {
+			m.CopyStatusMsg = fmt.Sprintf("Failed to discover models: %v", msg.err)
+			return m, nil, ""
+		}
 		m.DiscoveredModels = msg.models
 		for i, md := range m.DiscoveredModels {
 			if md == m.Record.Model {
@@ -273,6 +280,9 @@ func (m TesterModel) Update(msg tea.Msg) (TesterModel, tea.Cmd, string) {
 		return m, nil, ""
 
 	case executeFinishedMsg:
+		if !finishTrackedRequest(&m.cancelExecution, &m.requestID, msg.id) {
+			return m, nil, ""
+		}
 		m.IsExecuting = false
 		m.LastResult = msg.result
 		m.setViewportContent(msg.result.FormattedBody)
@@ -286,7 +296,7 @@ func (m TesterModel) Update(msg tea.Msg) (TesterModel, tea.Cmd, string) {
 		return m, nil, ""
 
 	case streamChunkMsg:
-		if msg.id != m.StreamID {
+		if msg.id == 0 || msg.id != m.requestID {
 			// A chunk from a superseded request can still be delivered because
 			// bubbletea cannot cancel a command goroutine already blocked on an
 			// old channel — drop it so it cannot pollute the current stream.
@@ -399,9 +409,7 @@ func (m TesterModel) Update(msg tea.Msg) (TesterModel, tea.Cmd, string) {
 
 		switch msg.String() {
 		case "esc":
-			// Cancel any in-flight stream before leaving so its goroutine and
-			// HTTP connection do not leak while the user is on another screen.
-			m.CancelStreamRequest()
+			m.CancelRequests()
 			action = "back_to_manager"
 			return m, nil, action
 
@@ -510,7 +518,7 @@ func (m TesterModel) Update(msg tea.Msg) (TesterModel, tea.Cmd, string) {
 				m.CopyStatusMsg = "⏳ A request is already running — wait for it to finish or press Esc."
 				return m, nil, ""
 			}
-			m.CancelStreamRequest()
+			cancelTrackedRequest(&m.cancelExecution, &m.requestID)
 			m.IsExecuting = true
 			m.CopyStatusMsg = ""
 			m.ReasoningText = ""
@@ -544,14 +552,18 @@ func (m TesterModel) Update(msg tea.Msg) (TesterModel, tea.Cmd, string) {
 				}
 			}
 			m.IsStreamMode = isStream
+			ctx, id := beginTrackedRequest(&m.cancelExecution, &m.requestID)
 
 			if isStream {
-				execCmd, ch := m.runExecuteStreamCmd()
+				ch := make(chan api.StreamChunkMsg, 100)
 				m.StreamChan = ch
-				return m, tea.Batch(m.Spinner.Tick, execCmd), ""
-			} else {
-				return m, tea.Batch(m.Spinner.Tick, m.runExecuteNonStreamCmd()), ""
+				return m, tea.Batch(
+					m.Spinner.Tick,
+					m.runExecuteStreamCmd(ctx, ch),
+					waitForStreamChunkCmd(id, ch),
+				), ""
 			}
+			return m, tea.Batch(m.Spinner.Tick, m.runExecuteNonStreamCmd(ctx, id)), ""
 
 		case "alt+s":
 			// Toggle stream parameter in payload JSON
@@ -628,7 +640,7 @@ func (m TesterModel) Update(msg tea.Msg) (TesterModel, tea.Cmd, string) {
 
 // handleStreamChunk applies a single streamed chunk from the current request to
 // the model, re-renders the response viewport (throttled at ~30 FPS during streaming),
-// and either schedules the next chunk read (StreamID-tagged) or finalizes the result when done.
+// and either schedules the next chunk read (request-ID-tagged) or finalizes the result when done.
 func (m TesterModel) handleStreamChunk(msg api.StreamChunkMsg) (TesterModel, tea.Cmd, string) {
 	if msg.StatusCode != 0 {
 		m.StreamStatusCode = msg.StatusCode
@@ -684,13 +696,13 @@ func (m TesterModel) handleStreamChunk(msg api.StreamChunkMsg) (TesterModel, tea
 			m.LastStreamRender = time.Now()
 		}
 
-		return m, waitForStreamChunkCmd(m.StreamID, m.StreamChan), ""
+		return m, waitForStreamChunkCmd(m.requestID, m.StreamChan), ""
 	}
 
 	// Stream is complete (msg.Done == true): perform final high-quality formatting & markdown rendering.
 	m.IsExecuting = false
 	m.StreamChan = nil
-	m.CancelStreamRequest()
+	cancelTrackedRequest(&m.cancelExecution, &m.requestID)
 
 	reasoningText := m.ReasoningText
 	contentText := m.ContentText
@@ -781,55 +793,48 @@ func (m TesterModel) handleStreamChunk(msg api.StreamChunkMsg) (TesterModel, tea
 	return m, nil, ""
 }
 
-func (m TesterModel) runFetchModelsCmd() tea.Cmd {
+func (m TesterModel) runFetchModelsCmd(ctx context.Context, id uint64) tea.Cmd {
 	baseURL := m.Record.BaseURL
 	apiKey := m.Record.APIKey
 	return func() tea.Msg {
-		models, err := api.FetchModels(baseURL, apiKey)
-		return testerModelsFetchedMsg{models: models, err: err}
+		models, err := api.FetchModels(ctx, baseURL, apiKey)
+		return testerModelsFetchedMsg{id: id, models: models, err: err}
 	}
 }
 
-func (m TesterModel) runExecuteNonStreamCmd() tea.Cmd {
+func (m TesterModel) runExecuteNonStreamCmd(ctx context.Context, id uint64) tea.Cmd {
 	baseURL := m.Record.BaseURL
 	apiKey := m.Record.APIKey
 	apiType := m.Record.APIType
 	payload := m.Textarea.Value()
 
 	return func() tea.Msg {
-		res := api.ExecuteTestRequest(baseURL, apiKey, apiType, payload)
-		return executeFinishedMsg{result: res}
+		res := api.ExecuteTestRequest(ctx, baseURL, apiKey, apiType, payload)
+		return executeFinishedMsg{id: id, result: res}
 	}
 }
 
-func (m *TesterModel) runExecuteStreamCmd() (tea.Cmd, chan api.StreamChunkMsg) {
-	// Every send gets a fresh id (and context) so that a stream superseded by a
-	// new request can be cancelled and its late chunks dropped by id.
-	m.StreamID++
-	ctx, cancel := context.WithCancel(context.Background())
-	m.CancelStream = cancel
-
+func (m TesterModel) runExecuteStreamCmd(ctx context.Context, ch chan<- api.StreamChunkMsg) tea.Cmd {
 	baseURL := m.Record.BaseURL
 	apiKey := m.Record.APIKey
 	apiType := m.Record.APIType
 	payload := m.Textarea.Value()
 
-	ch := make(chan api.StreamChunkMsg, 100)
-	go api.ExecuteStreamRequest(ctx, baseURL, apiKey, apiType, payload, ch)
-	return waitForStreamChunkCmd(m.StreamID, ch), ch
-}
-
-// CancelStreamRequest cancels the in-flight stream (if any) so its goroutine and
-// HTTP connection are released promptly when the user navigates away or quits,
-// instead of leaking until the hard timeout expires.
-func (m *TesterModel) CancelStreamRequest() {
-	if m.CancelStream != nil {
-		m.CancelStream()
-		m.CancelStream = nil
+	return func() tea.Msg {
+		api.ExecuteStreamRequest(ctx, baseURL, apiKey, apiType, payload, ch)
+		return nil
 	}
 }
 
-func waitForStreamChunkCmd(id int, ch chan api.StreamChunkMsg) tea.Cmd {
+// CancelRequests releases all HTTP work owned by this screen.
+func (m *TesterModel) CancelRequests() {
+	cancelTrackedRequest(&m.cancelExecution, &m.requestID)
+	cancelTrackedRequest(&m.cancelModels, &m.modelsRequestID)
+	m.IsExecuting = false
+	m.StreamChan = nil
+}
+
+func waitForStreamChunkCmd(id uint64, ch <-chan api.StreamChunkMsg) tea.Cmd {
 	return func() tea.Msg {
 		if ch == nil {
 			return streamChunkMsg{id: id, msg: api.StreamChunkMsg{Done: true}}

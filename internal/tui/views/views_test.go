@@ -376,9 +376,10 @@ func TestProbeModel_RequiresManualModelWhenFetchFails(t *testing.T) {
 
 	m := NewProbeModel(database)
 	m.Step = StepFetchingModels
+	m.requestID = 1
 
 	// No models discovered: input must not be pre-filled with a default model.
-	m, _, _ = m.Update(modelsFetchedMsg{models: nil, err: nil})
+	m, _, _ = m.Update(modelsFetchedMsg{id: 1, models: nil, err: nil})
 	if m.Step != StepSelectModel {
 		t.Fatalf("expected StepSelectModel, got %v", m.Step)
 	}
@@ -728,6 +729,80 @@ func TestProbeModel_TypingInAPIKeyFieldMarksEdit(t *testing.T) {
 	}
 }
 
+func TestTesterModel_IgnoresStaleAsyncResults(t *testing.T) {
+	database, err := db.InitDB(":memory:")
+	if err != nil {
+		t.Fatalf("failed to init memory db: %v", err)
+	}
+	defer database.Close()
+
+	m := NewTesterModel(database, db.ProviderRecord{BaseURL: "http://localhost", APIType: api.APITypeOpenAIChat, Model: "gpt-4o"})
+	m.requestID = 2
+	m.IsExecuting = true
+	m, _, _ = m.Update(executeFinishedMsg{id: 1, result: &api.TestResult{FormattedBody: "stale"}})
+	if !m.IsExecuting || m.LastResult != nil || m.requestID != 2 {
+		t.Fatal("stale non-stream result changed the active request")
+	}
+
+	m, _, _ = m.Update(executeFinishedMsg{id: 2, result: &api.TestResult{FormattedBody: "fresh"}})
+	if m.IsExecuting || m.LastResult == nil || m.LastResult.FormattedBody != "fresh" {
+		t.Fatal("current non-stream result was not applied")
+	}
+
+	m.modelsRequestID = 4
+	m, _, _ = m.Update(testerModelsFetchedMsg{id: 3, models: []string{"stale-model"}})
+	if len(m.DiscoveredModels) != 0 || m.modelsRequestID != 4 {
+		t.Fatal("stale model list changed the active screen")
+	}
+	m, _, _ = m.Update(testerModelsFetchedMsg{id: 4, models: []string{"fresh-model"}})
+	if len(m.DiscoveredModels) != 1 || m.DiscoveredModels[0] != "fresh-model" {
+		t.Fatal("current model list was not applied")
+	}
+}
+
+func TestProbeModel_IgnoresStaleAsyncResults(t *testing.T) {
+	database, err := db.InitDB(":memory:")
+	if err != nil {
+		t.Fatalf("failed to init memory db: %v", err)
+	}
+	defer database.Close()
+
+	m := NewProbeModel(database)
+	m.Step = StepFetchingModels
+	m.requestID = 2
+	m, _, _ = m.Update(modelsFetchedMsg{id: 1, models: []string{"stale-model"}})
+	if m.Step != StepFetchingModels || len(m.DiscoveredModels) != 0 || m.requestID != 2 {
+		t.Fatal("stale model fetch changed the active probe")
+	}
+
+	m, _, _ = m.Update(modelsFetchedMsg{id: 2, models: []string{"fresh-model"}})
+	if m.Step != StepSelectModel || m.SelectedModel != "fresh-model" {
+		t.Fatal("current model fetch was not applied")
+	}
+}
+
+func TestTesterModel_CancelRequestsOnEscape(t *testing.T) {
+	m := NewTesterModel(nil, db.ProviderRecord{})
+	m.requestID = 1
+	m.modelsRequestID = 2
+	m.IsExecuting = true
+	executionCancelled := false
+	modelsCancelled := false
+	m.cancelExecution = func() { executionCancelled = true }
+	m.cancelModels = func() { modelsCancelled = true }
+
+	m, _, action := m.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	if action != "back_to_manager" {
+		t.Fatalf("expected back_to_manager, got %q", action)
+	}
+	if !executionCancelled || !modelsCancelled {
+		t.Fatal("escape did not cancel all HTTP requests")
+	}
+	if m.IsExecuting || m.requestID != 0 || m.modelsRequestID != 0 {
+		t.Fatal("escape did not clear request state")
+	}
+}
+
 func TestTesterModel_IgnoresStaleStreamChunks(t *testing.T) {
 	database, err := db.InitDB(":memory:")
 	if err != nil {
@@ -743,7 +818,7 @@ func TestTesterModel_IgnoresStaleStreamChunks(t *testing.T) {
 		Model:   "gpt-4o",
 	}
 	m := NewTesterModel(database, rec)
-	m.StreamID = 7 // emulate a current send that reached stream #7
+	m.requestID = 7 // emulate a current send that reached stream #7
 
 	// A chunk tagged with an old stream id must be ignored entirely: it must
 	// not touch content, executing state, or LastResult.
@@ -788,7 +863,7 @@ func TestTesterModel_RejectsSendWhileExecuting(t *testing.T) {
 	}
 	m := NewTesterModel(database, rec)
 	m.IsExecuting = true
-	m.StreamID = 3
+	m.requestID = 3
 
 	// Ctrl+S while a request is running must be rejected: no new stream id is
 	// allocated, executing state is preserved, and the user gets a hint.
@@ -796,8 +871,8 @@ func TestTesterModel_RejectsSendWhileExecuting(t *testing.T) {
 	if !m.IsExecuting {
 		t.Fatal("IsExecuting must stay true when a send is rejected")
 	}
-	if m.StreamID != 3 {
-		t.Fatalf("rejected send must not allocate a new stream id, got %d", m.StreamID)
+	if m.requestID != 3 {
+		t.Fatalf("rejected send must not allocate a new stream id, got %d", m.requestID)
 	}
 	if m.CopyStatusMsg == "" {
 		t.Fatal("expected a status hint after rejected send")
@@ -947,7 +1022,8 @@ func TestProbeModel_ModelListLengthDisplay(t *testing.T) {
 
 	// 1. When models are fetched successfully
 	discovered := []string{"gpt-4o", "gpt-4o-mini", "o3-mini"}
-	m, _, _ = m.Update(modelsFetchedMsg{models: discovered})
+	m.requestID = 1
+	m, _, _ = m.Update(modelsFetchedMsg{id: 1, models: discovered})
 
 	if !strings.Contains(m.StatusMsg, "Model list length: 3") {
 		t.Errorf("expected StatusMsg to contain 'Model list length: 3', got %q", m.StatusMsg)
@@ -964,7 +1040,8 @@ func TestProbeModel_ModelListLengthDisplay(t *testing.T) {
 	// 2. When no models are fetched
 	mEmpty := NewProbeModel(database)
 	mEmpty.Resize(100, 30)
-	mEmpty, _, _ = mEmpty.Update(modelsFetchedMsg{models: nil})
+	mEmpty.requestID = 1
+	mEmpty, _, _ = mEmpty.Update(modelsFetchedMsg{id: 1, models: nil})
 
 	if !strings.Contains(mEmpty.StatusMsg, "Model list length: 0") {
 		t.Errorf("expected empty StatusMsg to contain 'Model list length: 0', got %q", mEmpty.StatusMsg)
@@ -1003,7 +1080,8 @@ func TestTesterModel_ModelListLengthDisplay(t *testing.T) {
 
 	// 2. Models fetched message
 	discovered := []string{"gpt-4o", "gpt-4o-mini", "o3-mini"}
-	m, _, _ = m.Update(testerModelsFetchedMsg{models: discovered})
+	m.modelsRequestID = 1
+	m, _, _ = m.Update(testerModelsFetchedMsg{id: 1, models: discovered})
 
 	if !strings.Contains(m.CopyStatusMsg, "Model list length: 3") {
 		t.Errorf("expected CopyStatusMsg after fetch to contain 'Model list length: 3', got %q", m.CopyStatusMsg)
@@ -1307,7 +1385,3 @@ func TestManagerModel_NarrowWidthCardWidth(t *testing.T) {
 		t.Fatalf("expected Viewport.Width <= 45 on narrow screen, got %d", m.Viewport.Width)
 	}
 }
-
-
-
-

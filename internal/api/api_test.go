@@ -172,7 +172,7 @@ data:[DONE]`
 	}))
 	defer server.Close()
 
-	res := ExecuteTestRequest(server.URL, "sk-dummy-key", APITypeOpenAIChat, `{"model":"glm-5.2"}`)
+	res := ExecuteTestRequest(context.Background(), server.URL, "sk-dummy-key", APITypeOpenAIChat, `{"model":"glm-5.2"}`)
 	if res.StatusCode != 200 {
 		t.Fatalf("expected HTTP 200, got %d", res.StatusCode)
 	}
@@ -197,7 +197,7 @@ func TestExecuteRequestOmitsAuthHeaderWhenKeyEmpty(t *testing.T) {
 	}))
 	defer server.Close()
 
-	res := ExecuteTestRequest(server.URL, "", APITypeOpenAIChat, `{"model":"test"}`)
+	res := ExecuteTestRequest(context.Background(), server.URL, "", APITypeOpenAIChat, `{"model":"test"}`)
 	if res.Error != "" {
 		t.Fatalf("unexpected error: %s", res.Error)
 	}
@@ -221,7 +221,7 @@ func TestExecuteRequestFormatsNullErrorResponses(t *testing.T) {
 	}))
 	defer server.Close()
 
-	res := ExecuteTestRequest(server.URL, "", APITypeOpenAIResponses, `{"model":"deepseek-v4-flash","stream":false}`)
+	res := ExecuteTestRequest(context.Background(), server.URL, "", APITypeOpenAIResponses, `{"model":"deepseek-v4-flash","stream":false}`)
 	if res.Error != "" {
 		t.Fatalf("unexpected error: %s", res.Error)
 	}
@@ -248,7 +248,7 @@ func TestFetchModelsOmitsAuthHeaderWhenKeyEmpty(t *testing.T) {
 	}))
 	defer server.Close()
 
-	models, err := FetchModels(server.URL, "")
+	models, err := FetchModels(context.Background(), server.URL, "")
 	if err != nil {
 		t.Fatalf("FetchModels error: %v", err)
 	}
@@ -282,7 +282,7 @@ func TestFetchModelsFallsBackToRootForPrefixedBase(t *testing.T) {
 	// The path prefix has no model list; the root base does. The fallback must
 	// work for any prefix, not just /anthropic.
 	baseURL := server.URL + "/any-prefix"
-	models, err := FetchModels(baseURL, "")
+	models, err := FetchModels(context.Background(), baseURL, "")
 	if err != nil {
 		t.Fatalf("FetchModels error: %v", err)
 	}
@@ -301,6 +301,37 @@ func TestFetchModelsFallsBackToRootForPrefixedBase(t *testing.T) {
 	}
 }
 
+func TestFetchModelsReportsFailuresAndCancellation(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer server.Close()
+
+	models, err := FetchModels(context.Background(), server.URL, "")
+	if err == nil || len(models) != 0 {
+		t.Fatalf("expected model discovery error, got models=%v err=%v", models, err)
+	}
+	if !strings.Contains(err.Error(), "HTTP 500") {
+		t.Fatalf("expected HTTP status in discovery error, got %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	_, err = FetchModels(ctx, server.URL, "")
+	if err == nil || !strings.Contains(err.Error(), context.Canceled.Error()) {
+		t.Fatalf("expected context cancellation, got %v", err)
+	}
+}
+
+func TestExecuteRequestHonorsContextCancellation(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	res := ExecuteTestRequest(ctx, "http://localhost:1", "", APITypeOpenAIChat, `{}`)
+	if !strings.Contains(res.Error, context.Canceled.Error()) {
+		t.Fatalf("expected context cancellation, got %q", res.Error)
+	}
+}
+
 func TestProbeWithEmptyKey(t *testing.T) {
 	var authCount int32
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -313,7 +344,7 @@ func TestProbeWithEmptyKey(t *testing.T) {
 	}))
 	defer server.Close()
 
-	res, err := ProbeProviderWithModel(server.URL, "", "test-model")
+	res, err := ProbeProviderWithModel(context.Background(), server.URL, "", "test-model")
 	if err != nil {
 		t.Fatalf("ProbeProviderWithModel with empty key error: %v", err)
 	}
@@ -358,8 +389,8 @@ func TestProbeProviderAndExecute(t *testing.T) {
 	}))
 	defer server.Close()
 
-	// Probe provider
-	res, err := ProbeProvider(server.URL, "sk-test-key")
+	// Probe provider with an explicitly selected model.
+	res, err := ProbeProviderWithModel(context.Background(), server.URL, "sk-test-key", "gpt-4o")
 	if err != nil {
 		t.Fatalf("ProbeProvider error: %v", err)
 	}
@@ -378,13 +409,9 @@ func TestProbeProviderAndExecute(t *testing.T) {
 		t.Errorf("expected openai_chat in supported types, got %v", res.SupportedAPITypes)
 	}
 
-	if len(res.DiscoveredModels) != 2 {
-		t.Errorf("expected 2 discovered models, got %d", len(res.DiscoveredModels))
-	}
-
 	// Execute Test Request
 	payload := GeneratePayloadTemplate(APITypeOpenAIChat, "gpt-4o", "high")
-	testRes := ExecuteTestRequest(server.URL, "sk-test-key", APITypeOpenAIChat, payload)
+	testRes := ExecuteTestRequest(context.Background(), server.URL, "sk-test-key", APITypeOpenAIChat, payload)
 	if testRes.Error != "" {
 		t.Fatalf("ExecuteTestRequest error: %s", testRes.Error)
 	}
@@ -545,7 +572,7 @@ func TestExecuteRequestFallsBackToRootEndpoint(t *testing.T) {
 
 	// The wizard probes both /v1 and root candidates, so a provider that only
 	// serves at the root must also be reachable from ExecuteTestRequest.
-	res := ExecuteTestRequest(server.URL, "", APITypeOpenAIChat, `{"model":"test","stream":false}`)
+	res := ExecuteTestRequest(context.Background(), server.URL, "", APITypeOpenAIChat, `{"model":"test","stream":false}`)
 	if res.StatusCode != http.StatusOK {
 		t.Fatalf("expected fallback to root endpoint, got status %d (err=%q)", res.StatusCode, res.Error)
 	}
@@ -604,7 +631,7 @@ func TestExecuteRequestDoesNotFallbackAfterHTTPError(t *testing.T) {
 			}))
 			defer server.Close()
 
-			res := ExecuteTestRequest(server.URL, "", APITypeOpenAIChat, `{"model":"test"}`)
+			res := ExecuteTestRequest(context.Background(), server.URL, "", APITypeOpenAIChat, `{"model":"test"}`)
 			if res.StatusCode != status {
 				t.Fatalf("expected original HTTP status %d, got %d", status, res.StatusCode)
 			}
@@ -647,7 +674,7 @@ func TestExecuteRequestRejectsUnreachableEndpoint(t *testing.T) {
 	}))
 	defer server.Close()
 
-	res := ExecuteTestRequest(server.URL, "", APITypeOpenAIChat, `{"model":"test"}`)
+	res := ExecuteTestRequest(context.Background(), server.URL, "", APITypeOpenAIChat, `{"model":"test"}`)
 	if res.StatusCode == http.StatusOK {
 		t.Fatalf("expected non-200 status, got %d", res.StatusCode)
 	}

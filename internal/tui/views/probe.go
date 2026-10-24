@@ -1,6 +1,7 @@
 package views
 
 import (
+	"context"
 	"fmt"
 	"strings"
 
@@ -24,35 +25,39 @@ const (
 )
 
 type ProbeModel struct {
-	DB               *db.DB
-	Step             ProbeStep
-	Width            int
-	Height           int
-	BaseURLInput     textinput.Model
-	APIKeyInput      textinput.Model
-	NameInput        textinput.Model
-	ModelInput       textinput.Model
-	FocusIndex       int
-	Spinner          spinner.Model
-	ProbeResult      *api.ProbeResult
+	DB                *db.DB
+	Step              ProbeStep
+	Width             int
+	Height            int
+	BaseURLInput      textinput.Model
+	APIKeyInput       textinput.Model
+	NameInput         textinput.Model
+	ModelInput        textinput.Model
+	FocusIndex        int
+	Spinner           spinner.Model
+	ProbeResult       *api.ProbeResult
 	AvailableAPITypes []string
-	SelectedAPIType  string
-	SelectedModel    string
-	DiscoveredModels []string
-	ModelCursor      int
-	APITypeCursor    int
-	StatusMsg        string
-	IsError          bool
-	AutofilledKey    bool
-	APIKeyEdited     bool
+	SelectedAPIType   string
+	SelectedModel     string
+	DiscoveredModels  []string
+	ModelCursor       int
+	APITypeCursor     int
+	StatusMsg         string
+	IsError           bool
+	AutofilledKey     bool
+	APIKeyEdited      bool
+	requestID         uint64
+	cancelRequest     context.CancelFunc
 }
 
 type modelsFetchedMsg struct {
+	id     uint64
 	models []string
 	err    error
 }
 
 type probeFinishedMsg struct {
+	id     uint64
 	result *api.ProbeResult
 	err    error
 }
@@ -118,25 +123,34 @@ func (m ProbeModel) Update(msg tea.Msg) (ProbeModel, tea.Cmd, string) {
 
 	switch msg := msg.(type) {
 	case modelsFetchedMsg:
+		if !finishTrackedRequest(&m.cancelRequest, &m.requestID, msg.id) {
+			return m, nil, ""
+		}
 		m.DiscoveredModels = msg.models
 		m.Step = StepSelectModel
 		if len(m.DiscoveredModels) > 0 {
 			m.SelectedModel = m.DiscoveredModels[0]
 			m.ModelInput.SetValue(m.SelectedModel)
 			m.StatusMsg = fmt.Sprintf("Discovered %d models via /models (Model list length: %d). Pick or specify one below.", len(m.DiscoveredModels), len(m.DiscoveredModels))
+			m.IsError = false
 		} else {
-			// No models could be discovered; require the user to enter a model id
-			// manually instead of silently falling back to a default like gpt-4o.
+			// Manual input remains available when discovery fails.
 			m.SelectedModel = ""
 			m.ModelInput.SetValue("")
 			m.ModelCursor = 0
 			m.StatusMsg = "Could not fetch models automatically (Model list length: 0). Please enter the exact model id below."
+			if msg.err != nil {
+				m.StatusMsg = fmt.Sprintf("Could not fetch models automatically (Model list length: 0): %v. Please enter the exact model id below.", msg.err)
+			}
+			m.IsError = msg.err != nil
 		}
 		m.ModelInput.Focus()
-		m.IsError = false
 		return m, textinput.Blink, ""
 
 	case probeFinishedMsg:
+		if !finishTrackedRequest(&m.cancelRequest, &m.requestID, msg.id) {
+			return m, nil, ""
+		}
 		if msg.err != nil {
 			m.StatusMsg = fmt.Sprintf("Probing error: %v", msg.err)
 			m.IsError = true
@@ -157,6 +171,7 @@ func (m ProbeModel) Update(msg tea.Msg) (ProbeModel, tea.Cmd, string) {
 	case tea.KeyMsg:
 		switch msg.String() {
 		case "esc":
+			m.CancelRequest()
 			action = "back_to_manager"
 			return m, nil, action
 
@@ -186,7 +201,8 @@ func (m ProbeModel) Update(msg tea.Msg) (ProbeModel, tea.Cmd, string) {
 				m.Step = StepFetchingModels
 				m.StatusMsg = ""
 				m.IsError = false
-				return m, tea.Batch(m.Spinner.Tick, m.runFetchModelsCmd()), ""
+				ctx, id := beginTrackedRequest(&m.cancelRequest, &m.requestID)
+				return m, tea.Batch(m.Spinner.Tick, m.runFetchModelsCmd(ctx, id)), ""
 
 			case StepSelectModel:
 				customModel := strings.TrimSpace(m.ModelInput.Value())
@@ -229,7 +245,8 @@ func (m ProbeModel) Update(msg tea.Msg) (ProbeModel, tea.Cmd, string) {
 				m.Step = StepProbing
 				m.StatusMsg = ""
 				m.IsError = false
-				return m, tea.Batch(m.Spinner.Tick, m.runProbeCmd()), ""
+				ctx, id := beginTrackedRequest(&m.cancelRequest, &m.requestID)
+				return m, tea.Batch(m.Spinner.Tick, m.runProbeCmd(ctx, id)), ""
 
 			case StepSelectAPITypeAndName:
 				types := m.ensureAvailableAPITypes()
@@ -414,22 +431,26 @@ func (m *ProbeModel) checkAutofillAPIKey() {
 	}
 }
 
-func (m ProbeModel) runFetchModelsCmd() tea.Cmd {
+func (m *ProbeModel) CancelRequest() {
+	cancelTrackedRequest(&m.cancelRequest, &m.requestID)
+}
+
+func (m ProbeModel) runFetchModelsCmd(ctx context.Context, id uint64) tea.Cmd {
 	baseURL := m.BaseURLInput.Value()
 	apiKey := m.APIKeyInput.Value()
 	return func() tea.Msg {
-		models, err := api.FetchModels(baseURL, apiKey)
-		return modelsFetchedMsg{models: models, err: err}
+		models, err := api.FetchModels(ctx, baseURL, apiKey)
+		return modelsFetchedMsg{id: id, models: models, err: err}
 	}
 }
 
-func (m ProbeModel) runProbeCmd() tea.Cmd {
+func (m ProbeModel) runProbeCmd(ctx context.Context, id uint64) tea.Cmd {
 	baseURL := m.BaseURLInput.Value()
 	apiKey := m.APIKeyInput.Value()
 	selectedModel := m.SelectedModel
 	return func() tea.Msg {
-		res, err := api.ProbeProviderWithModel(baseURL, apiKey, selectedModel)
-		return probeFinishedMsg{result: res, err: err}
+		res, err := api.ProbeProviderWithModel(ctx, baseURL, apiKey, selectedModel)
+		return probeFinishedMsg{id: id, result: res, err: err}
 	}
 }
 

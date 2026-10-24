@@ -61,9 +61,11 @@ func (m AppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case tea.KeyMsg:
 		if msg.String() == "ctrl+c" {
-			// Release any in-flight stream before the program exits.
-			if m.Screen == ScreenTester {
-				m.TesterView.CancelStreamRequest()
+			switch m.Screen {
+			case ScreenProbe:
+				m.ProbeView.CancelRequest()
+			case ScreenTester:
+				m.TesterView.CancelRequests()
 			}
 			return m, tea.Quit
 		}
@@ -92,7 +94,8 @@ func (m AppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.TesterView.Resize(m.Width, m.Height)
 				}
 				m.Screen = ScreenTester
-				return m, m.TesterView.Init()
+				cmd := m.TesterView.Init()
+				return m, cmd
 			}
 		case "quit":
 			return m, tea.Quit
