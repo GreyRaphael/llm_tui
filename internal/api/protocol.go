@@ -2,13 +2,18 @@ package api
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"strings"
 )
 
-const maxSSELineBytes = 10 * 1024 * 1024
+const (
+	maxSSELineBytes  = 10 * 1024 * 1024
+	maxSSESniffBytes = 4 * 1024
+)
 
 func endpointPathForAPIType(apiType string) string {
 	switch apiType {
@@ -21,6 +26,34 @@ func endpointPathForAPIType(apiType string) string {
 	default:
 		return "/chat/completions"
 	}
+}
+
+// sniffSSEStream classifies a response body whose Content-Type does not say
+// "text/event-stream". It peeks a small prefix (never consuming data) so callers
+// can stream SSE while still buffering complete JSON responses.
+func sniffSSEStream(r io.Reader) (io.Reader, bool, error) {
+	br := bufio.NewReaderSize(r, maxSSESniffBytes)
+	for n := 1; n <= maxSSESniffBytes; n++ {
+		prefix, err := br.Peek(n)
+		if isSSEResponse(prefix) {
+			return br, true, nil
+		}
+		trimmed := bytes.TrimSpace(prefix)
+		if len(trimmed) > 0 {
+			switch trimmed[0] {
+			case '{', '[', '"':
+				// JSON responses cannot start with an SSE data line.
+				return br, false, nil
+			}
+		}
+		if err != nil {
+			if errors.Is(err, io.EOF) {
+				return br, false, nil
+			}
+			return br, false, err
+		}
+	}
+	return br, false, nil
 }
 
 func parseSSELine(line string) (map[string]interface{}, bool, bool) {

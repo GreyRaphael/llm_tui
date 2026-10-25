@@ -157,23 +157,23 @@ func ExecuteStreamRequest(ctx context.Context, baseURL, apiKey, apiType, payload
 		})
 	}
 
+	var reader io.Reader = resp.Body
 	isSSE := strings.Contains(resp.Header.Get("Content-Type"), "text/event-stream")
-	var body []byte
 	if !isSSE {
-		body, err = readAllLimited(resp.Body, maxResponseBodyBytes)
-		if err == nil {
-			isSSE = isSSEResponse(body)
-		}
+		// Some proxies stream SSE while advertising a JSON content type. Sniff a
+		// small prefix instead of buffering the whole body so such streams are
+		// still consumed incrementally.
+		reader, isSSE, err = sniffSSEStream(resp.Body)
 	}
 	if err == nil {
 		if isSSE {
-			reader := io.Reader(resp.Body)
-			if body != nil {
-				reader = bytes.NewReader(body)
-			}
 			err = consumeSSEStream(ctx, reader, handleChunk)
 		} else {
-			err = sendCompleteJSONChunk(ctx, body, msgChan, &usage, time.Since(startTime))
+			var body []byte
+			body, err = readAllLimited(reader, maxResponseBodyBytes)
+			if err == nil {
+				err = sendCompleteJSONChunk(ctx, body, msgChan, &usage, time.Since(startTime))
+			}
 		}
 	}
 	if err != nil {

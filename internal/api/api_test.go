@@ -554,6 +554,35 @@ data: {"response":{"id":"resp-1","output":[],"status":"completed","usage":{"inpu
 	}
 }
 
+func TestExecuteStreamRequestDetectsSSEWithJSONContentType(t *testing.T) {
+	sseData := `data: {"choices":[{"delta":{"content":"hi"}}]}
+data: {"choices":[{"delta":{"content":" there"}}]}
+data: [DONE]
+`
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Some proxies stream SSE while advertising a JSON content type.
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(sseData))
+	}))
+	defer server.Close()
+
+	ch := make(chan StreamChunkMsg, 20)
+	go ExecuteStreamRequest(context.Background(), server.URL, "", APITypeOpenAIChat, `{"model":"test","stream":true}`, ch)
+
+	var content strings.Builder
+	var done bool
+	for msg := range ch {
+		content.WriteString(msg.ContentDelta)
+		if msg.Done {
+			done = true
+		}
+	}
+	if content.String() != "hi there" || !done {
+		t.Fatalf("expected mislabeled SSE to stream incrementally, got content=%q done=%v", content.String(), done)
+	}
+}
+
 func TestExecuteStreamRequestCompleteJSONResponses(t *testing.T) {
 	tests := []struct {
 		name          string
@@ -743,27 +772,65 @@ func TestExecuteRequestDoesNotFallbackAfterHTTPError(t *testing.T) {
 }
 
 func TestProbeDoesNotFallbackAfterHTTPError(t *testing.T) {
-	var requests int32
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		atomic.AddInt32(&requests, 1)
-		w.WriteHeader(http.StatusInternalServerError)
-	}))
-	defer server.Close()
+	for _, status := range []int{http.StatusBadRequest, http.StatusUnauthorized, http.StatusForbidden, http.StatusTooManyRequests, http.StatusInternalServerError} {
+		t.Run(fmt.Sprintf("status_%d", status), func(t *testing.T) {
+			var requests int32
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				atomic.AddInt32(&requests, 1)
+				w.WriteHeader(status)
+			}))
+			defer server.Close()
 
-	urls := []string{server.URL + "/v1/chat/completions", server.URL + "/chat/completions"}
-	if supported, _ := probeEndpoint(context.Background(), server.Client(), urls, "Authorization", "", nil); supported {
-		t.Fatal("expected failed probe")
-	}
-	if got := atomic.LoadInt32(&requests); got != 1 {
-		t.Fatalf("expected one OpenAI probe request, got %d", got)
-	}
+			urls := []string{server.URL + "/v1/chat/completions", server.URL + "/chat/completions"}
+			if supported, _ := probeEndpoint(context.Background(), server.Client(), urls, "Authorization", "", nil); supported {
+				t.Fatal("expected failed probe")
+			}
+			if got := atomic.LoadInt32(&requests); got != 1 {
+				t.Fatalf("expected one OpenAI probe request, got %d", got)
+			}
 
-	atomic.StoreInt32(&requests, 0)
-	if supported, _ := probeEndpointAnthropic(context.Background(), server.Client(), urls, "", nil); supported {
-		t.Fatal("expected failed Anthropic probe")
+			atomic.StoreInt32(&requests, 0)
+			if supported, _ := probeEndpointAnthropic(context.Background(), server.Client(), urls, "", nil); supported {
+				t.Fatal("expected failed Anthropic probe")
+			}
+			if got := atomic.LoadInt32(&requests); got != 1 {
+				t.Fatalf("expected one Anthropic probe request, got %d", got)
+			}
+		})
 	}
-	if got := atomic.LoadInt32(&requests); got != 1 {
-		t.Fatalf("expected one Anthropic probe request, got %d", got)
+}
+
+func TestProbeFallsBackWhenPathIsMissingOrUnsupported(t *testing.T) {
+	for _, status := range []int{http.StatusNotFound, http.StatusMethodNotAllowed} {
+		t.Run(fmt.Sprintf("status_%d", status), func(t *testing.T) {
+			var requests int32
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				atomic.AddInt32(&requests, 1)
+				if strings.HasPrefix(r.URL.Path, "/v1/") {
+					w.WriteHeader(status)
+					return
+				}
+				w.WriteHeader(http.StatusOK)
+			}))
+			defer server.Close()
+
+			openAIURLs := []string{server.URL + "/v1/chat/completions", server.URL + "/chat/completions"}
+			if supported, msg := probeEndpoint(context.Background(), server.Client(), openAIURLs, "Authorization", "", nil); !supported {
+				t.Fatalf("expected OpenAI probe to fall back to root, got %q", msg)
+			}
+			if got := atomic.LoadInt32(&requests); got != 2 {
+				t.Fatalf("expected OpenAI probe to try both URLs, got %d requests", got)
+			}
+
+			atomic.StoreInt32(&requests, 0)
+			anthropicURLs := []string{server.URL + "/v1/messages", server.URL + "/messages"}
+			if supported, msg := probeEndpointAnthropic(context.Background(), server.Client(), anthropicURLs, "", nil); !supported {
+				t.Fatalf("expected Anthropic probe to fall back to root, got %q", msg)
+			}
+			if got := atomic.LoadInt32(&requests); got != 2 {
+				t.Fatalf("expected Anthropic probe to try both URLs, got %d requests", got)
+			}
+		})
 	}
 }
 
