@@ -28,22 +28,22 @@ func setAuthHeaders(h http.Header, apiType, apiKey string) {
 	}
 }
 
-// doPostWithFallback tries the next candidate URL only when the current endpoint
-// does not exist. Other responses and transport errors are returned immediately:
-// replaying a non-idempotent POST could duplicate a completion or image request.
+// doPostWithFallback tries the next candidate URL only when the current route is
+// missing or rejects the POST method. Other responses and transport errors are
+// returned immediately to avoid replaying a request that may have done work.
 func doPostWithFallback(ctx context.Context, client *http.Client, urls []string, apiType, apiKey, payloadJSON string) (*http.Response, error) {
-	var notFoundResp *http.Response
-	closeNotFound := func() {
-		if notFoundResp != nil {
-			_ = notFoundResp.Body.Close()
-			notFoundResp = nil
+	var fallbackResp *http.Response
+	closeFallback := func() {
+		if fallbackResp != nil {
+			_ = fallbackResp.Body.Close()
+			fallbackResp = nil
 		}
 	}
 
 	for _, targetURL := range urls {
 		req, err := http.NewRequestWithContext(ctx, http.MethodPost, targetURL, bytes.NewBufferString(payloadJSON))
 		if err != nil {
-			closeNotFound()
+			closeFallback()
 			return nil, err
 		}
 		req.Header.Set("Content-Type", "application/json")
@@ -55,23 +55,31 @@ func doPostWithFallback(ctx context.Context, client *http.Client, urls []string,
 
 		resp, err := client.Do(req)
 		if err != nil {
-			closeNotFound()
+			closeFallback()
 			return nil, err
 		}
 		if resp.StatusCode == http.StatusOK {
-			closeNotFound()
+			closeFallback()
 			return resp, nil
 		}
-		if resp.StatusCode == http.StatusNotFound {
-			closeNotFound()
-			notFoundResp = resp
+		if statusAllowsEndpointFallback(resp.StatusCode) {
+			closeFallback()
+			// Buffer a bounded error body and close the network body before the
+			// next request. This preserves both the final error and keep-alive.
+			body, readErr := readAllLimited(resp.Body, maxErrorBodyBytes)
+			_ = resp.Body.Close()
+			if readErr != nil {
+				return nil, fmt.Errorf("read fallback response from %s: %w", targetURL, readErr)
+			}
+			resp.Body = io.NopCloser(bytes.NewReader(body))
+			fallbackResp = resp
 			continue
 		}
 
-		closeNotFound()
+		closeFallback()
 		return resp, nil
 	}
-	return notFoundResp, nil
+	return fallbackResp, nil
 }
 
 // ExecuteStreamRequest dispatches a payload and emits SSE deltas over msgChan.

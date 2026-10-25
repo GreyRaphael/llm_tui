@@ -710,6 +710,54 @@ func TestExecuteRequestFallsBackToRootEndpoint(t *testing.T) {
 	}
 }
 
+func TestExecuteRequestFallsBackAfterMethodNotAllowed(t *testing.T) {
+	var requests int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt32(&requests, 1)
+		if r.URL.Path == "/v1/chat/completions" {
+			w.WriteHeader(http.StatusMethodNotAllowed)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"root endpoint"}}]}`))
+	}))
+	defer server.Close()
+
+	res := ExecuteTestRequest(context.Background(), server.URL, "", APITypeOpenAIChat, `{"model":"test"}`)
+	if res.StatusCode != http.StatusOK {
+		t.Fatalf("expected 405 fallback to match probing, got status %d", res.StatusCode)
+	}
+	if got := atomic.LoadInt32(&requests); got != 2 {
+		t.Fatalf("expected two endpoint attempts, got %d", got)
+	}
+}
+
+func TestExecuteFallbackReusesConnection(t *testing.T) {
+	remoteAddrs := make(chan string, 2)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		remoteAddrs <- r.RemoteAddr
+		if r.URL.Path == "/v1/chat/completions" {
+			w.WriteHeader(http.StatusNotFound)
+			_, _ = w.Write([]byte(strings.Repeat("not found ", 4096)))
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"choices":[]}`))
+	}))
+	defer server.Close()
+
+	res := ExecuteTestRequest(context.Background(), server.URL, "", APITypeOpenAIChat, `{"model":"test"}`)
+	if res.StatusCode != http.StatusOK {
+		t.Fatalf("expected fallback success, got status %d", res.StatusCode)
+	}
+	first, second := <-remoteAddrs, <-remoteAddrs
+	if first != second {
+		t.Fatalf("expected drained 404 response to reuse connection, got %q and %q", first, second)
+	}
+}
+
 func TestExecuteStreamFallsBackToRootEndpoint(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {

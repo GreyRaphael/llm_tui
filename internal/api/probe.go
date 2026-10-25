@@ -165,11 +165,10 @@ func ProbeProviderWithModel(ctx context.Context, baseURL, apiKey, modelName stri
 	return result, nil
 }
 
-// probeStatusIsRetryable reports whether a failed probe suggests that the
-// candidate URL itself is wrong (missing route or unsupported method) rather
-// than the provider rejecting the request. Auth, quota and server errors are
-// definitive for the current base URL, so they must not be replayed.
-func probeStatusIsRetryable(status int) bool {
+// statusAllowsEndpointFallback reports whether a response identifies an
+// unsuitable candidate route rather than a completed provider request. Auth,
+// quota, server, and transport failures must not be replayed.
+func statusAllowsEndpointFallback(status int) bool {
 	return status == http.StatusNotFound || status == http.StatusMethodNotAllowed
 }
 
@@ -206,7 +205,7 @@ func probeEndpoint(ctx context.Context, client *http.Client, urls []string, auth
 		} else {
 			errSnippet = fmt.Sprintf("%d %s", resp.StatusCode, errSnippet)
 		}
-		if !probeStatusIsRetryable(resp.StatusCode) {
+		if !statusAllowsEndpointFallback(resp.StatusCode) {
 			return false, errSnippet
 		}
 		lastStatus = errSnippet
@@ -248,7 +247,7 @@ func probeEndpointAnthropic(ctx context.Context, client *http.Client, urls []str
 		} else {
 			errSnippet = fmt.Sprintf("%d %s", resp.StatusCode, errSnippet)
 		}
-		if !probeStatusIsRetryable(resp.StatusCode) {
+		if !statusAllowsEndpointFallback(resp.StatusCode) {
 			return false, errSnippet
 		}
 		lastStatus = errSnippet
