@@ -3,12 +3,13 @@ package clipboard
 import (
 	"bytes"
 	"errors"
-	"github.com/aymanbagabas/go-osc52/v2"
 	"io"
 	"os"
 	"os/exec"
 	"runtime"
 	"strings"
+
+	"github.com/aymanbagabas/go-osc52/v2"
 )
 
 // WriteAll writes UTF-8 text (including Chinese characters and Emojis) to the system clipboard

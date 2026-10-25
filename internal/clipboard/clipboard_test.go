@@ -2,10 +2,41 @@ package clipboard
 
 import (
 	"bytes"
+	"os"
+	"path/filepath"
+	"runtime"
 	"testing"
 
 	"github.com/aymanbagabas/go-osc52/v2"
 )
+
+func TestWriteAllUsesLinuxClipboardTool(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("linux clipboard dispatch test")
+	}
+	dir := t.TempDir()
+	outputFile := filepath.Join(dir, "clipboard.txt")
+	script := filepath.Join(dir, "xclip")
+	if err := os.WriteFile(script, []byte("#!/bin/sh\ncat > \"$CLIP_OUT\"\n"), 0o755); err != nil {
+		t.Fatalf("failed to create fake xclip: %v", err)
+	}
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	t.Setenv("DISPLAY", ":99")
+	t.Setenv("WAYLAND_DISPLAY", "")
+	t.Setenv("TMUX", "")
+	t.Setenv("CLIP_OUT", outputFile)
+
+	if err := WriteAll("你好 clipboard"); err != nil {
+		t.Fatalf("WriteAll failed: %v", err)
+	}
+	got, err := os.ReadFile(outputFile)
+	if err != nil {
+		t.Fatalf("fake clipboard did not receive input: %v", err)
+	}
+	if string(got) != "你好 clipboard" {
+		t.Fatalf("unexpected clipboard content %q", got)
+	}
+}
 
 func TestWriteOSC52ToUnicodeAndTerminalModes(t *testing.T) {
 	text := "你好，世界！LLM TUI 剪贴板测试 😀🚀🤖"
