@@ -20,6 +20,11 @@ func TestWriteAllUsesLinuxClipboardTool(t *testing.T) {
 	if err := os.WriteFile(script, []byte("#!/bin/sh\ncat > \"$CLIP_OUT\"\n"), 0o755); err != nil {
 		t.Fatalf("failed to create fake xclip: %v", err)
 	}
+	// On WSL, prevent the native PowerShell path from winning before xclip.
+	powerShell := filepath.Join(dir, "powershell.exe")
+	if err := os.WriteFile(powerShell, []byte("#!/bin/sh\nexit 1\n"), 0o755); err != nil {
+		t.Fatalf("failed to create fake powershell.exe: %v", err)
+	}
 	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
 	t.Setenv("DISPLAY", ":99")
 	t.Setenv("WAYLAND_DISPLAY", "")

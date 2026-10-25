@@ -555,31 +555,68 @@ data: {"response":{"id":"resp-1","output":[],"status":"completed","usage":{"inpu
 }
 
 func TestExecuteStreamRequestDetectsSSEWithJSONContentType(t *testing.T) {
-	sseData := `data: {"choices":[{"delta":{"content":"hi"}}]}
-data: {"choices":[{"delta":{"content":" there"}}]}
-data: [DONE]
-`
+	releaseServer := make(chan struct{})
+	released := false
+	release := func() {
+		if !released {
+			close(releaseServer)
+			released = true
+		}
+	}
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// Some proxies stream SSE while advertising a JSON content type.
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write([]byte(sseData))
+		flusher, ok := w.(http.Flusher)
+		if !ok {
+			return
+		}
+		_, _ = w.Write([]byte("data: {\"choices\":[{\"delta\":{\"content\":\"hi\"}}]}\n\n"))
+		flusher.Flush()
+		<-releaseServer
+		_, _ = w.Write([]byte("data: {\"choices\":[{\"delta\":{\"content\":\" there\"}}]}\n\ndata: [DONE]\n\n"))
+		flusher.Flush()
 	}))
 	defer server.Close()
+	defer release()
 
 	ch := make(chan StreamChunkMsg, 20)
 	go ExecuteStreamRequest(context.Background(), server.URL, "", APITypeOpenAIChat, `{"model":"test","stream":true}`, ch)
 
+	// The server is blocked before sending the rest of the body. Receiving the
+	// first delta now proves that sniffing did not buffer the whole response.
+	timer := time.NewTimer(5 * time.Second)
+	defer timer.Stop()
 	var content strings.Builder
+	for content.String() != "hi" {
+		select {
+		case msg, ok := <-ch:
+			if !ok {
+				t.Fatal("stream closed before the first delta arrived")
+			}
+			if msg.Err != nil {
+				t.Fatalf("unexpected stream error: %v", msg.Err)
+			}
+			if msg.Done {
+				t.Fatal("stream completed before the server released the body")
+			}
+			content.WriteString(msg.ContentDelta)
+		case <-timer.C:
+			t.Fatal("first SSE delta was buffered until the server completed the body")
+		}
+	}
+
+	release()
 	var done bool
 	for msg := range ch {
 		content.WriteString(msg.ContentDelta)
-		if msg.Done {
-			done = true
+		if msg.Err != nil {
+			t.Fatalf("unexpected stream error: %v", msg.Err)
 		}
+		done = done || msg.Done
 	}
 	if content.String() != "hi there" || !done {
-		t.Fatalf("expected mislabeled SSE to stream incrementally, got content=%q done=%v", content.String(), done)
+		t.Fatalf("expected complete mislabeled SSE content, got content=%q done=%v", content.String(), done)
 	}
 }
 
