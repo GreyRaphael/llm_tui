@@ -96,7 +96,7 @@ go build -o llm_tui .
 | Key | Action |
 | --- | --- |
 | `Tab` / `Shift+Tab` | Switch Input Fields |
-| `↑` / `k`, `↓` / `j` | Select Model or API Type |
+| `↑` / `↓` | Select Model or API Type |
 | `Enter` | Proceed to Next Step / Confirm Selection |
 | `Esc` | Cancel and Return to Provider Manager |
 
