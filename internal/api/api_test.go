@@ -795,6 +795,95 @@ func TestExecuteFallbackReusesConnection(t *testing.T) {
 	}
 }
 
+func TestExecuteFallbackContinuesWhenErrorBodyIsOversized(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/v1/chat/completions" {
+			w.WriteHeader(http.StatusNotFound)
+			_, _ = w.Write([]byte(strings.Repeat("x", int(maxErrorBodyBytes)+1)))
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"root endpoint"}}]}`))
+	}))
+	defer server.Close()
+
+	res := ExecuteTestRequest(context.Background(), server.URL, "", APITypeOpenAIChat, `{"model":"test"}`)
+	if res.StatusCode != http.StatusOK {
+		t.Fatalf("oversized 404 body must not abort the fallback chain, got status %d (err=%q)", res.StatusCode, res.Error)
+	}
+}
+
+func TestExecuteFallbackContinuesAfterTruncatedErrorBody(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/v1/chat/completions" {
+			conn, buf, err := w.(http.Hijacker).Hijack()
+			if err != nil {
+				t.Errorf("hijack failed: %v", err)
+				return
+			}
+			_, _ = buf.WriteString("HTTP/1.1 404 Not Found\r\nContent-Length: 100\r\n\r\npartial")
+			_ = buf.Flush()
+			_ = conn.Close()
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"choices":[]}`))
+	}))
+	defer server.Close()
+
+	res := ExecuteTestRequest(context.Background(), server.URL, "", APITypeOpenAIChat, `{"model":"test"}`)
+	if res.StatusCode != http.StatusOK {
+		t.Fatalf("truncated 404 body must not abort the fallback chain, got status %d (err=%q)", res.StatusCode, res.Error)
+	}
+}
+
+func TestExecuteFallbackDoesNotStallOnBlockedErrorBody(t *testing.T) {
+	release := make(chan struct{})
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/v1/chat/completions" {
+			w.Header().Set("Content-Length", "100")
+			w.WriteHeader(http.StatusNotFound)
+			_, _ = w.Write([]byte("partial"))
+			w.(http.Flusher).Flush()
+			<-release
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"choices":[]}`))
+	}))
+	defer server.Close()
+	defer close(release)
+
+	start := time.Now()
+	res := ExecuteTestRequest(context.Background(), server.URL, "", APITypeOpenAIChat, `{"model":"test"}`)
+	elapsed := time.Since(start)
+	if res.StatusCode != http.StatusOK {
+		t.Fatalf("blocked 404 body must not abort the fallback chain, got status %d (err=%q)", res.StatusCode, res.Error)
+	}
+	if elapsed > 5*time.Second {
+		t.Fatalf("fallback waited %v for a stalled error body", elapsed)
+	}
+}
+
+func TestExecuteFallbackPreservesFinalStatusWhenBodyFails(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		_, _ = w.Write([]byte(strings.Repeat("y", int(maxErrorBodyBytes)+1)))
+	}))
+	defer server.Close()
+
+	res := ExecuteTestRequest(context.Background(), server.URL, "", APITypeOpenAIChat, `{"model":"test"}`)
+	if res.StatusCode != http.StatusMethodNotAllowed {
+		t.Fatalf("expected final 405 status to survive a failed drain, got %d", res.StatusCode)
+	}
+	if !strings.Contains(res.RawBody, "Method Not Allowed") {
+		t.Fatalf("expected status line as fallback body, got %q", res.RawBody)
+	}
+}
+
 func TestExecuteStreamFallsBackToRootEndpoint(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {

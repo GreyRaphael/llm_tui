@@ -64,15 +64,7 @@ func doPostWithFallback(ctx context.Context, client *http.Client, urls []string,
 		}
 		if statusAllowsEndpointFallback(resp.StatusCode) {
 			closeFallback()
-			// Buffer a bounded error body and close the network body before the
-			// next request. This preserves both the final error and keep-alive.
-			body, readErr := readAllLimited(resp.Body, maxErrorBodyBytes)
-			_ = resp.Body.Close()
-			if readErr != nil {
-				return nil, fmt.Errorf("read fallback response from %s: %w", targetURL, readErr)
-			}
-			resp.Body = io.NopCloser(bytes.NewReader(body))
-			fallbackResp = resp
+			fallbackResp = bufferFallbackResponse(resp)
 			continue
 		}
 
@@ -80,6 +72,37 @@ func doPostWithFallback(ctx context.Context, client *http.Client, urls []string,
 		return resp, nil
 	}
 	return fallbackResp, nil
+}
+
+// bufferFallbackResponse closes the network body of a fallback (404/405)
+// response and replaces it with a replay of the bytes read so far. Draining the
+// small error body lets the connection be reused while still letting the caller
+// report the provider's error message. Draining is best-effort: oversized,
+// truncated, or stalled bodies are abandoned instead of aborting the fallback
+// chain, in which case the status line is kept as the body.
+func bufferFallbackResponse(resp *http.Response) *http.Response {
+	var body []byte
+	// ContentLength is -1 when the length is unknown (e.g. chunked errors); only
+	// skip draining when the provider declares a body that is already too large.
+	if resp.ContentLength <= maxErrorBodyBytes {
+		networkBody := resp.Body
+		drained := make(chan []byte, 1)
+		go func() {
+			b, _ := readAllLimited(networkBody, maxErrorBodyBytes)
+			drained <- b
+		}()
+		select {
+		case body = <-drained:
+		case <-time.After(fallbackDrainTimeout):
+			// The read may still be blocked; closing below unblocks it.
+		}
+	}
+	_ = resp.Body.Close()
+	if body == nil {
+		body = []byte(resp.Status)
+	}
+	resp.Body = io.NopCloser(bytes.NewReader(body))
+	return resp
 }
 
 // ExecuteStreamRequest dispatches a payload and emits SSE deltas over msgChan.
