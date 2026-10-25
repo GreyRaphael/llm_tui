@@ -30,7 +30,7 @@ func (m TesterModel) handleStreamChunk(msg api.StreamChunkMsg) (TesterModel, tea
 	cancelTrackedRequest(&m.cancelExecution, &m.requestID)
 	m.setViewportContent(m.renderCompletedStream())
 	m.LastResult = m.buildStreamResult()
-	m.CopyStatusMsg = ""
+	m.setStatus("", false)
 	m.Viewport.GotoBottom()
 	return m, nil, ""
 }

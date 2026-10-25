@@ -174,7 +174,11 @@ func (m TesterModel) renderRightPane(width, height int) string {
 	var content strings.Builder
 	content.WriteString(styles.SubtitleStyle.Render(title) + "\n")
 	if m.CopyStatusMsg != "" {
-		content.WriteString(styles.BadgeSuccessStyle.Render(m.CopyStatusMsg) + "\n")
+		statusStyle := styles.BadgeSuccessStyle
+		if m.StatusIsError {
+			statusStyle = styles.ErrorStyle
+		}
+		content.WriteString(statusStyle.Render(m.CopyStatusMsg) + "\n")
 	}
 	switch {
 	case m.IsExecuting && !m.IsStreamMode:

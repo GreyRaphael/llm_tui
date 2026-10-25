@@ -80,10 +80,14 @@ func (m ProbeModel) handleProbeKey(msg tea.KeyMsg) (ProbeModel, tea.Cmd, string)
 		m.switchCredentialFocus()
 	case "enter":
 		return m.handleProbeEnter()
-	case "up", "k":
-		m.moveProbeSelection(-1)
-	case "down", "j":
-		m.moveProbeSelection(1)
+	case "up":
+		if m.moveProbeSelection(-1) {
+			return m, nil, ""
+		}
+	case "down":
+		if m.moveProbeSelection(1) {
+			return m, nil, ""
+		}
 	}
 	return m.updateActiveInput(msg)
 }
@@ -201,7 +205,10 @@ func (m ProbeModel) saveProviderRecord() (ProbeModel, tea.Cmd, string) {
 	return m, nil, "record_created"
 }
 
-func (m *ProbeModel) moveProbeSelection(delta int) {
+// moveProbeSelection moves the active list cursor and reports whether the key
+// was consumed. When it returns false the key must still reach the focused text
+// input (e.g. arrow keys while editing the Base URL).
+func (m *ProbeModel) moveProbeSelection(delta int) bool {
 	if m.Step == StepSelectModel && len(m.DiscoveredModels) > 0 {
 		next := m.ModelCursor + delta
 		if next >= 0 && next < len(m.DiscoveredModels) {
@@ -209,15 +216,20 @@ func (m *ProbeModel) moveProbeSelection(delta int) {
 			m.SelectedModel = m.DiscoveredModels[next]
 			m.ModelInput.SetValue(m.SelectedModel)
 		}
-		return
+		return true
 	}
 	if m.Step == StepSelectAPITypeAndName {
 		types := m.ensureAvailableAPITypes()
+		if len(types) == 0 {
+			return false
+		}
 		next := m.APITypeCursor + delta
 		if next >= 0 && next < len(types) {
 			m.selectAPIType(next)
 		}
+		return true
 	}
+	return false
 }
 
 func (m ProbeModel) updateActiveInput(msg tea.Msg) (ProbeModel, tea.Cmd, string) {

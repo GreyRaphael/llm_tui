@@ -29,6 +29,9 @@ type ManagerModel struct {
 }
 
 func NewManagerModel(database *db.DB, version string) ManagerModel {
+	if version == "" {
+		version = "v1.0.0"
+	}
 	vp := viewport.New(76, 14)
 	m := ManagerModel{
 		DB:       database,

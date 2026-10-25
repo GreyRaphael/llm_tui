@@ -26,9 +26,6 @@ type AppModel struct {
 }
 
 func NewAppModel(database *db.DB, version string) AppModel {
-	if version == "" {
-		version = "v1.0.0"
-	}
 	return AppModel{
 		DB:          database,
 		Screen:      ScreenManager,

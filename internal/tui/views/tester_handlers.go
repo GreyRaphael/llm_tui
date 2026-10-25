@@ -15,12 +15,19 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 )
 
+// setStatus records a user-facing message together with its severity so the
+// renderer can avoid showing failures in the success badge.
+func (m *TesterModel) setStatus(message string, isError bool) {
+	m.CopyStatusMsg = message
+	m.StatusIsError = isError
+}
+
 func (m TesterModel) handleModelsFetched(msg testerModelsFetchedMsg) (TesterModel, tea.Cmd, string) {
 	if !finishTrackedRequest(&m.cancelModels, &m.modelsRequestID, msg.id) {
 		return m, nil, ""
 	}
 	if msg.err != nil {
-		m.CopyStatusMsg = fmt.Sprintf("Failed to discover models: %v", msg.err)
+		m.setStatus(fmt.Sprintf("Failed to discover models: %v", msg.err), true)
 		return m, nil, ""
 	}
 	m.DiscoveredModels = msg.models
@@ -31,7 +38,7 @@ func (m TesterModel) handleModelsFetched(msg testerModelsFetchedMsg) (TesterMode
 		}
 	}
 	if len(m.DiscoveredModels) > 0 && m.CopyStatusMsg == "" {
-		m.CopyStatusMsg = fmt.Sprintf("Discovered %d models via /models (Model list length: %d)", len(m.DiscoveredModels), len(m.DiscoveredModels))
+		m.setStatus(fmt.Sprintf("Discovered %d models via /models (Model list length: %d)", len(m.DiscoveredModels), len(m.DiscoveredModels)), false)
 	}
 	return m, nil, ""
 }
@@ -46,9 +53,9 @@ func (m TesterModel) handleExecuteFinished(msg executeFinishedMsg) (TesterModel,
 	m.Viewport.GotoTop()
 	if len(msg.result.SavedImages) > 0 {
 		m.LatestSavedImage = msg.result.SavedImages[0]
-		m.CopyStatusMsg = fmt.Sprintf("🖼️ Saved %d image(s) to ./generated_images! [Ctrl+O] to open.", len(msg.result.SavedImages))
+		m.setStatus(fmt.Sprintf("🖼️ Saved %d image(s) to ./generated_images! [Ctrl+O] to open.", len(msg.result.SavedImages)), false)
 	} else {
-		m.CopyStatusMsg = ""
+		m.setStatus("", false)
 	}
 	return m, nil, ""
 }
@@ -79,7 +86,7 @@ func (m TesterModel) applyImageSize() (TesterModel, tea.Cmd, string) {
 	preset := SupportedImageSizes[m.AspectRatioIndex]
 	var payload map[string]interface{}
 	if err := json.Unmarshal([]byte(m.Textarea.Value()), &payload); err != nil {
-		m.CopyStatusMsg = fmt.Sprintf("❌ Cannot change image size: invalid JSON payload: %v", err)
+		m.setStatus(fmt.Sprintf("❌ Cannot change image size: invalid JSON payload: %v", err), true)
 		return m, nil, ""
 	}
 	payload["size"] = preset.Size
@@ -88,16 +95,16 @@ func (m TesterModel) applyImageSize() (TesterModel, tea.Cmd, string) {
 	}
 	buf, err := json.MarshalIndent(payload, "", "  ")
 	if err != nil {
-		m.CopyStatusMsg = fmt.Sprintf("❌ Cannot change image size: %v", err)
+		m.setStatus(fmt.Sprintf("❌ Cannot change image size: %v", err), true)
 		return m, nil, ""
 	}
 	m.Textarea.SetValue(string(buf))
 	m.SelectingAspectRatio = false
 	m.Record.CustomPayload = m.Textarea.Value()
 	if err := m.DB.UpdateRecord(&m.Record); err != nil {
-		m.CopyStatusMsg = fmt.Sprintf("⚠️ Failed to save image size to DB: %v", err)
+		m.setStatus(fmt.Sprintf("⚠️ Failed to save image size to DB: %v", err), true)
 	} else {
-		m.CopyStatusMsg = fmt.Sprintf("📐 Changed size to '%s' (%s %s)", preset.Size, preset.Ratio, preset.Tier)
+		m.setStatus(fmt.Sprintf("📐 Changed size to '%s' (%s %s)", preset.Size, preset.Ratio, preset.Tier), false)
 	}
 	return m, nil, ""
 }
@@ -122,9 +129,9 @@ func (m TesterModel) handleModelKey(msg tea.KeyMsg) (TesterModel, tea.Cmd, strin
 			m.regeneratePayloadPreservingStream()
 			m.Record.CustomPayload = m.Textarea.Value()
 			if err := m.DB.UpdateRecord(&m.Record); err != nil {
-				m.CopyStatusMsg = fmt.Sprintf("⚠️ Failed to save model switch to DB: %v", err)
+				m.setStatus(fmt.Sprintf("⚠️ Failed to save model switch to DB: %v", err), true)
 			} else {
-				m.CopyStatusMsg = fmt.Sprintf("Switched model to '%s' (Model list length: %d)", newModel, len(m.DiscoveredModels))
+				m.setStatus(fmt.Sprintf("Switched model to '%s' (Model list length: %d)", newModel, len(m.DiscoveredModels)), false)
 			}
 		}
 		m.SelectingModel = false
@@ -167,7 +174,7 @@ func (m TesterModel) handleMainKey(msg tea.KeyMsg) (TesterModel, tea.Cmd, string
 		if len(m.DiscoveredModels) > 0 {
 			m.SelectingModel = true
 		} else {
-			m.CopyStatusMsg = "No models list available via /models for this provider (Model list length: 0)"
+			m.setStatus("No models list available via /models for this provider (Model list length: 0)", false)
 		}
 		return m, nil, ""
 	case "tab", "shift+tab":
@@ -211,15 +218,15 @@ func (m TesterModel) handleMainKey(msg tea.KeyMsg) (TesterModel, tea.Cmd, string
 
 func (m *TesterModel) copyToClipboard(text, successMessage string) {
 	if err := clipboard.WriteAll(text); err != nil {
-		m.CopyStatusMsg = fmt.Sprintf("❌ Copy failed: %v", err)
+		m.setStatus(fmt.Sprintf("❌ Copy failed: %v", err), true)
 		return
 	}
-	m.CopyStatusMsg = successMessage
+	m.setStatus(successMessage, false)
 }
 
 func (m TesterModel) openSizePicker() (TesterModel, tea.Cmd, string) {
 	if m.Record.APIType != api.APITypeOpenAIImages {
-		m.CopyStatusMsg = "Image size presets are only applicable to image generation (openai_images)"
+		m.setStatus("Image size presets are only applicable to image generation (openai_images)", false)
 		return m, nil, ""
 	}
 	m.SelectingAspectRatio = true
@@ -240,30 +247,29 @@ func (m TesterModel) openSizePicker() (TesterModel, tea.Cmd, string) {
 func (m TesterModel) openLatestImage() (TesterModel, tea.Cmd, string) {
 	if m.LatestSavedImage == "" {
 		if m.Record.APIType == api.APITypeOpenAIImages {
-			m.CopyStatusMsg = "No image has been generated yet in this session (Press Ctrl+S to generate)"
+			m.setStatus("No image has been generated yet in this session (Press Ctrl+S to generate)", false)
 		}
 		return m, nil, ""
 	}
 	if err := api.OpenImageFile(m.LatestSavedImage); err != nil {
 		if errors.Is(err, api.ErrHeadlessEnvironment) {
-			m.CopyStatusMsg = fmt.Sprintf("⚠️ %v", err)
+			m.setStatus(fmt.Sprintf("⚠️ %v", err), true)
 		} else {
-			m.CopyStatusMsg = fmt.Sprintf("❌ Failed to open image: %v", err)
+			m.setStatus(fmt.Sprintf("❌ Failed to open image: %v", err), true)
 		}
 		return m, nil, ""
 	}
-	m.CopyStatusMsg = fmt.Sprintf("🖼️ Opened %s in system viewer", m.LatestSavedImage)
+	m.setStatus(fmt.Sprintf("🖼️ Opened %s in system viewer", m.LatestSavedImage), false)
 	return m, nil, ""
 }
 
 func (m TesterModel) startExecution() (TesterModel, tea.Cmd, string) {
 	if m.IsExecuting {
-		m.CopyStatusMsg = "⏳ A request is already running — wait for it to finish or press Esc."
+		m.setStatus("⏳ A request is already running — wait for it to finish or press Esc.", false)
 		return m, nil, ""
 	}
-	cancelTrackedRequest(&m.cancelExecution, &m.requestID)
 	m.IsExecuting = true
-	m.CopyStatusMsg = ""
+	m.setStatus("", false)
 	m.ReasoningText = ""
 	m.ContentText = ""
 	m.StreamStatusCode = 0
@@ -279,7 +285,7 @@ func (m TesterModel) startExecution() (TesterModel, tea.Cmd, string) {
 	m.Record.CustomPayload = m.Textarea.Value()
 	m.Record.ReasoningEffort = m.ReasoningEffort
 	if err := m.DB.UpdateRecord(&m.Record); err != nil {
-		m.CopyStatusMsg = fmt.Sprintf("⚠️ Failed to save record to DB: %v", err)
+		m.setStatus(fmt.Sprintf("⚠️ Failed to save record to DB: %v", err), true)
 	}
 
 	var payload map[string]interface{}
@@ -304,26 +310,26 @@ func (m TesterModel) startExecution() (TesterModel, tea.Cmd, string) {
 
 func (m TesterModel) toggleStreamMode() (TesterModel, tea.Cmd, string) {
 	if m.Record.APIType == api.APITypeOpenAIImages {
-		m.CopyStatusMsg = "Stream mode is not applicable to image generation"
+		m.setStatus("Stream mode is not applicable to image generation", false)
 		return m, nil, ""
 	}
 	var payload map[string]interface{}
 	if err := json.Unmarshal([]byte(m.Textarea.Value()), &payload); err != nil {
-		m.CopyStatusMsg = "❌ Cannot toggle stream: invalid JSON payload"
+		m.setStatus("❌ Cannot toggle stream: invalid JSON payload", true)
 		return m, nil, ""
 	}
 	currentStream, _ := payload["stream"].(bool)
 	payload["stream"] = !currentStream
 	buf, err := json.MarshalIndent(payload, "", "  ")
 	if err != nil {
-		m.CopyStatusMsg = fmt.Sprintf("❌ Cannot toggle stream: %v", err)
+		m.setStatus(fmt.Sprintf("❌ Cannot toggle stream: %v", err), true)
 		return m, nil, ""
 	}
 	m.Textarea.SetValue(string(buf))
 	if currentStream {
-		m.CopyStatusMsg = "🔄 Stream mode: OFF"
+		m.setStatus("🔄 Stream mode: OFF", false)
 	} else {
-		m.CopyStatusMsg = "🔄 Stream mode: ON"
+		m.setStatus("🔄 Stream mode: ON", false)
 	}
 	return m, nil, ""
 }

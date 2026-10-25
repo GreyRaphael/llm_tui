@@ -91,6 +91,7 @@ type TesterModel struct {
 	LastResult             *api.TestResult
 	LatestSavedImage       string
 	CopyStatusMsg          string
+	StatusIsError          bool
 	Width                  int
 	Height                 int
 	StreamChan             chan api.StreamChunkMsg

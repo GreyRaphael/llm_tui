@@ -430,7 +430,7 @@ func TestProbeModel_APITypeSwitchKeepsAliasInSync(t *testing.T) {
 	m.NameInput.SetValue("deepseek-v4-flash")
 
 	// Move down to the second API type; the auto-generated alias must follow.
-	m, _, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'j'}})
+	m, _, _ = m.Update(tea.KeyMsg{Type: tea.KeyDown})
 	if m.SelectedAPIType != api.APITypeAnthropic {
 		t.Fatalf("expected selected API type anthropic, got %q", m.SelectedAPIType)
 	}
@@ -473,7 +473,7 @@ func TestProbeModel_APITypeSwitchUpdatesLegacyAlias(t *testing.T) {
 	// Simulate a record that was created before the suffix was dropped.
 	m.NameInput.SetValue("deepseek-v4-flash (openai_responses)")
 
-	m, _, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'j'}})
+	m, _, _ = m.Update(tea.KeyMsg{Type: tea.KeyDown})
 	if got := m.NameInput.Value(); got != "deepseek-v4-flash" {
 		t.Fatalf("expected legacy alias revisited, got %q", got)
 	}
@@ -497,9 +497,54 @@ func TestProbeModel_APITypeSwitchPreservesCustomName(t *testing.T) {
 	m.APITypeCursor = 0
 	m.NameInput.SetValue("My DeepSeek Instance")
 
-	m, _, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'j'}})
+	m, _, _ = m.Update(tea.KeyMsg{Type: tea.KeyDown})
 	if got := m.NameInput.Value(); got != "My DeepSeek Instance" {
 		t.Fatalf("custom name should not be overwritten, got %q", got)
+	}
+}
+
+func TestProbeModel_TypingKDoesNotNavigateModelList(t *testing.T) {
+	database, err := db.InitDB(":memory:")
+	if err != nil {
+		t.Fatalf("failed to init memory db: %v", err)
+	}
+	defer database.Close()
+
+	m := NewProbeModel(database)
+	m.Step = StepSelectModel
+	m.DiscoveredModels = []string{"kimi-k2", "gpt-4o"}
+	m.SelectedModel = "kimi-k2"
+	m.ModelCursor = 0
+	m.ModelInput.SetValue("")
+	m.ModelInput.Focus()
+
+	m, _, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'k'}})
+	if m.ModelCursor != 0 {
+		t.Fatalf("typing 'k' must not move the list cursor, got %d", m.ModelCursor)
+	}
+	if got := m.ModelInput.Value(); got != "k" {
+		t.Fatalf("typing 'k' should reach the model input, got %q", got)
+	}
+
+	m, _, _ = m.Update(tea.KeyMsg{Type: tea.KeyDown})
+	if m.ModelCursor != 1 || m.ModelInput.Value() != "gpt-4o" {
+		t.Fatalf("arrow key should move the model list, got cursor=%d value=%q", m.ModelCursor, m.ModelInput.Value())
+	}
+}
+
+func TestProbeModel_TypingKInCredentials(t *testing.T) {
+	database, err := db.InitDB(":memory:")
+	if err != nil {
+		t.Fatalf("failed to init memory db: %v", err)
+	}
+	defer database.Close()
+
+	m := NewProbeModel(database)
+	m.Step = StepInputCredentials
+	m.FocusIndex = 0
+	m, _, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'k'}})
+	if got := m.BaseURLInput.Value(); got != "k" {
+		t.Fatalf("typing 'k' in the Base URL field was swallowed, got %q", got)
 	}
 }
 
@@ -817,6 +862,38 @@ func TestTesterModel_CancelRequestsOnEscape(t *testing.T) {
 	}
 	if m.IsExecuting || m.requestID != 0 || m.modelsRequestID != 0 {
 		t.Fatal("escape did not clear request state")
+	}
+}
+
+func TestTesterModel_ModelFetchFailureUsesErrorStatus(t *testing.T) {
+	m := NewTesterModel(nil, db.ProviderRecord{})
+	m.modelsRequestID = 1
+	m, _, _ = m.Update(testerModelsFetchedMsg{id: 1, err: fmt.Errorf("boom")})
+	if !m.StatusIsError {
+		t.Fatal("expected model discovery failure to be marked as an error")
+	}
+	if !strings.Contains(m.CopyStatusMsg, "Failed to discover models") {
+		t.Fatalf("unexpected status message: %q", m.CopyStatusMsg)
+	}
+
+	success := NewTesterModel(nil, db.ProviderRecord{})
+	success.modelsRequestID = 1
+	success, _, _ = success.Update(testerModelsFetchedMsg{id: 1, models: []string{"gpt-4o"}})
+	if success.StatusIsError {
+		t.Fatal("successful model discovery must not keep the error flag")
+	}
+}
+
+func TestNewManagerModelDefaultsVersion(t *testing.T) {
+	database, err := db.InitDB(":memory:")
+	if err != nil {
+		t.Fatalf("failed to init memory db: %v", err)
+	}
+	defer database.Close()
+
+	m := NewManagerModel(database, "")
+	if m.Version != "v1.0.0" {
+		t.Fatalf("expected default version v1.0.0, got %q", m.Version)
 	}
 }
 
