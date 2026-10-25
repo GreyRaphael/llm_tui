@@ -70,7 +70,7 @@ Extract and run:
 
 ### Option 2: Build from Source
 
-Requires Go 1.25+:
+Requires Go 1.27.3+:
 
 ```bash
 git clone https://github.com/GreyRaphael/llm_tui.git

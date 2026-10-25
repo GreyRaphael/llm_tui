@@ -70,7 +70,7 @@
 
 ### 方式二：从源码编译
 
-开发环境需要 Go 1.25+：
+开发环境需要 Go 1.27.3+：
 
 ```bash
 git clone https://github.com/GreyRaphael/llm_tui.git
