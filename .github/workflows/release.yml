@@ -15,6 +15,20 @@ jobs:
     steps:
       - name: Checkout Code
         uses: actions/checkout@v4
+        with:
+          # Fetch the annotated tag object so its message can be used as the
+          # release body.
+          fetch-depth: 0
+
+      - name: Prepare Release Notes
+        id: release_notes
+        run: |
+          git tag -l --format='%(contents)' "${GITHUB_REF_NAME}" > release-notes.md
+          if [ -s release-notes.md ]; then
+            echo "has_notes=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "has_notes=false" >> "$GITHUB_OUTPUT"
+          fi
 
       - name: Set up Go
         uses: actions/setup-go@v5
@@ -54,6 +68,9 @@ jobs:
           files: |
             dist/*.tar.gz
             dist/*.zip
-          generate_release_notes: true
+          # Prefer the annotated tag message (Chinese release notes); fall back
+          # to GitHub-generated notes for tags without an annotation.
+          body_path: ${{ steps.release_notes.outputs.has_notes == 'true' && 'release-notes.md' || '' }}
+          generate_release_notes: ${{ steps.release_notes.outputs.has_notes != 'true' }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
