@@ -2,8 +2,10 @@
 # Enforce per-package statement coverage minimums.
 #
 # Usage: scripts/check_coverage.sh [report]
-#   report  file containing the stdout of `go test -cover ./...`
-#           (defaults to standard input)
+#   report  file containing the stdout of `go test -cover ./...`.
+#           Without an argument, piped or redirected stdin is used as the
+#           report; on a terminal (or when stdin is empty, e.g. /dev/null) the
+#           suite is run from the repository root instead.
 #
 # Packages without test files are skipped. A package with tests but no
 # configured minimum fails, so a new package cannot silently ship untested.
@@ -25,8 +27,14 @@ trap 'rm -f "$report"' EXIT
 
 if [[ $# -ge 1 && -n "${1:-}" ]]; then
 	cat -- "$1" >"$report"
-else
+elif [[ -p /dev/stdin || -f /dev/stdin ]]; then
 	cat >"$report"
+else
+	repo_root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
+	if ! (cd -- "$repo_root" && go test -cover ./... >"$report"); then
+		cat "$report" >&2
+		exit 1
+	fi
 fi
 
 status=0
