@@ -1525,3 +1525,72 @@ func TestManagerModel_NarrowWidthCardWidth(t *testing.T) {
 		t.Fatalf("expected Viewport.Width <= 45 on narrow screen, got %d", m.Viewport.Width)
 	}
 }
+
+func TestTesterModel_ModelSwitchAliasHandling(t *testing.T) {
+	tests := []struct {
+		name        string
+		recordName  string
+		wantName    string
+		wantRenamed bool
+	}{
+		{name: "custom alias is preserved", recordName: "DeepSeek Production", wantName: "DeepSeek Production"},
+		{name: "empty alias follows new model", recordName: "", wantName: "gpt-4o-mini", wantRenamed: true},
+		{name: "model-derived alias follows new model", recordName: "gpt-4o", wantName: "gpt-4o-mini", wantRenamed: true},
+		{name: "legacy derived alias follows new model", recordName: "gpt-4o (openai_chat)", wantName: "gpt-4o-mini", wantRenamed: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			database, err := db.InitDB(":memory:")
+			if err != nil {
+				t.Fatalf("InitDB failed: %v", err)
+			}
+			defer database.Close()
+
+			rec := db.ProviderRecord{
+				Name:    tt.recordName,
+				BaseURL: "https://api.example.com",
+				APIType: api.APITypeOpenAIChat,
+				Model:   "gpt-4o",
+			}
+			if err := database.CreateRecord(&rec); err != nil {
+				t.Fatalf("CreateRecord failed: %v", err)
+			}
+
+			m := NewTesterModel(database, rec)
+			m.DiscoveredModels = []string{"gpt-4o", "gpt-4o-mini"}
+			m.ModelIndex = 1
+			m.SelectingModel = true
+
+			m, _, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+			if m.Record.Model != "gpt-4o-mini" {
+				t.Fatalf("expected Model updated to gpt-4o-mini, got %q", m.Record.Model)
+			}
+			if m.Record.Name != tt.wantName {
+				t.Fatalf("expected Name %q, got %q", tt.wantName, m.Record.Name)
+			}
+			if got := strings.Contains(m.CopyStatusMsg, "alias renamed to"); got != tt.wantRenamed {
+				t.Fatalf("expected rename status %v, got %v (%q)", tt.wantRenamed, got, m.CopyStatusMsg)
+			}
+
+			// The switch must be persisted, not just applied in memory.
+			records, err := database.ListRecords()
+			if err != nil {
+				t.Fatalf("ListRecords failed: %v", err)
+			}
+			var persisted *db.ProviderRecord
+			for i := range records {
+				if records[i].ID == rec.ID {
+					persisted = &records[i]
+					break
+				}
+			}
+			if persisted == nil {
+				t.Fatalf("record %d not found after update", rec.ID)
+			}
+			if persisted.Name != tt.wantName || persisted.Model != "gpt-4o-mini" {
+				t.Fatalf("expected persisted Name/Model %q/%q, got %q/%q", tt.wantName, "gpt-4o-mini", persisted.Name, persisted.Model)
+			}
+		})
+	}
+}
