@@ -11,7 +11,10 @@ import (
 )
 
 const (
-	maxSSELineBytes  = 10 * 1024 * 1024
+	maxSSELineBytes = 10 * 1024 * 1024
+
+	// maxSSESniffBytes bounds how much of a response with a non-SSE
+	// Content-Type is inspected before it is treated as a JSON document.
 	maxSSESniffBytes = 4 * 1024
 )
 
@@ -29,31 +32,55 @@ func endpointPathForAPIType(apiType string) string {
 }
 
 // sniffSSEStream classifies a response body whose Content-Type does not say
-// "text/event-stream". It peeks a small prefix (never consuming data) so callers
-// can stream SSE while still buffering complete JSON responses.
+// "text/event-stream". It reads at most one line ahead and replays everything it
+// consumed, so callers still stream incrementally.
+//
+// The decision is made from whole lines: SSE is recognised when a line starts
+// with "data:", and the body is treated as a single JSON document as soon as a
+// line starts with a JSON token or no data line shows up within
+// maxSSESniffBytes. Newline-delimited JSON (multiple documents) is deliberately
+// unsupported: such a body is classified as one JSON document and the decoder
+// reports the trailing content as an error.
 func sniffSSEStream(r io.Reader) (io.Reader, bool, error) {
 	br := bufio.NewReaderSize(r, maxSSESniffBytes)
-	for n := 1; n <= maxSSESniffBytes; n++ {
-		prefix, err := br.Peek(n)
-		if isSSEResponse(prefix) {
-			return br, true, nil
-		}
-		trimmed := bytes.TrimSpace(prefix)
-		if len(trimmed) > 0 {
-			switch trimmed[0] {
-			case '{', '[', '"':
-				// JSON responses cannot start with an SSE data line.
-				return br, false, nil
-			}
+	var sniffed bytes.Buffer
+
+	for sniffed.Len() < maxSSESniffBytes {
+		line, err := br.ReadSlice('\n')
+		sniffed.Write(line)
+		if sse, decided := classifySniffLine(line); decided {
+			return io.MultiReader(&sniffed, br), sse, nil
 		}
 		if err != nil {
-			if errors.Is(err, io.EOF) {
-				return br, false, nil
+			if errors.Is(err, io.EOF) || errors.Is(err, bufio.ErrBufferFull) {
+				// Either the body ended or a single line is longer than the
+				// sniff window: fall back to treating it as a JSON document.
+				return io.MultiReader(&sniffed, br), false, nil
 			}
-			return br, false, err
+			return io.MultiReader(&sniffed, br), false, err
 		}
 	}
-	return br, false, nil
+	return io.MultiReader(&sniffed, br), false, nil
+}
+
+// classifySniffLine inspects one line and reports whether the body has been
+// classified. A line starting with a JSON token means a single JSON document, a
+// line starting with "data:" means SSE. Other lines (comments, event names,
+// blank separators) are inconclusive and are skipped.
+func classifySniffLine(line []byte) (sse bool, decided bool) {
+	trimmed := bytes.TrimSpace(line)
+	if len(trimmed) == 0 {
+		return false, false
+	}
+	switch trimmed[0] {
+	case '{', '[', '"':
+		// JSON responses cannot start with an SSE data line.
+		return false, true
+	}
+	if bytes.HasPrefix(trimmed, []byte("data:")) {
+		return true, true
+	}
+	return false, false
 }
 
 func parseSSELine(line string) (map[string]interface{}, bool, bool) {

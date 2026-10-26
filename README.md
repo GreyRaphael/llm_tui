@@ -37,6 +37,9 @@ Built using the **Charm.sh** ecosystem (`bubbletea`, `lipgloss`, `viewport`, `te
   - Automatically formats `reasoning_effort` for OpenAI Chat, `reasoning` for OpenAI Responses, and `output_config.effort` for Anthropic Messages.
 - **⚡ Real-Time SSE Streaming & Reasoning Process Visualization**:
   - Native support for typewriter-style real-time streaming via HTTP SSE (`text/event-stream`).
+  - Also detects SSE that a proxy mislabels as `application/json` by sniffing the first lines, so such streams still render incrementally.
+  - Responses that are a single complete JSON document are rendered as one final delta; newline-delimited JSON (NDJSON) multi-document responses are intentionally unsupported and reported as a decode error.
+  - A request deadline (the built-in 120s cap) is surfaced as an error, while a user-initiated cancel stays silent.
   - Auto-detects `"stream": true/false` payload mode (toggle it manually anytime with `Alt+S`): Pretty JSON for non-stream, live typewriter display for stream mode with dedicated **💭 Thinking Process** and **💬 Response Content** cards.
 - **🎨 Terminal Glamour Markdown Rendering & Code Syntax Highlighting**:
   - Integrated Charm `glamour` Markdown renderer engine.
@@ -70,7 +73,7 @@ Extract and run:
 
 ### Option 2: Build from Source
 
-Requires Go 1.27.3+:
+Requires Go 1.26.0+:
 
 ```bash
 git clone https://github.com/GreyRaphael/llm_tui.git

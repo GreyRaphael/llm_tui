@@ -172,6 +172,25 @@ func statusAllowsEndpointFallback(status int) bool {
 	return status == http.StatusNotFound || status == http.StatusMethodNotAllowed
 }
 
+// readProbeStatus consumes a failed probe response and returns the status
+// snippet to report. Draining is best-effort (see drainErrorBody): an oversized,
+// truncated, or stalled error body must not abort the fallback chain, so the
+// status line is reported instead and the next candidate URL is still tried.
+func readProbeStatus(resp *http.Response) string {
+	body, complete := drainErrorBody(resp.Body, maxErrorBodyBytes)
+	// Closing unblocks a drain that timed out, releasing the connection.
+	_ = resp.Body.Close()
+
+	snippet := ""
+	if complete {
+		snippet = extractErrorMessage(string(body))
+	}
+	if snippet == "" {
+		return resp.Status
+	}
+	return fmt.Sprintf("%d %s", resp.StatusCode, snippet)
+}
+
 func probeEndpoint(ctx context.Context, client *http.Client, urls []string, authHeader, authVal string, payload []byte) (bool, string) {
 	var lastStatus string
 	for _, targetURL := range urls {
@@ -192,19 +211,8 @@ func probeEndpoint(ctx context.Context, client *http.Client, urls []string, auth
 			_ = resp.Body.Close()
 			return true, "200 OK (Supported)"
 		}
-		body, readErr := readAllLimited(resp.Body, maxErrorBodyBytes)
-		_ = resp.Body.Close()
-		if readErr != nil {
-			return false, fmt.Sprintf("Response read error: %v", readErr)
-		}
 
-		bodyStr := string(body)
-		errSnippet := extractErrorMessage(bodyStr)
-		if errSnippet == "" {
-			errSnippet = resp.Status
-		} else {
-			errSnippet = fmt.Sprintf("%d %s", resp.StatusCode, errSnippet)
-		}
+		errSnippet := readProbeStatus(resp)
 		if !statusAllowsEndpointFallback(resp.StatusCode) {
 			return false, errSnippet
 		}
@@ -234,19 +242,8 @@ func probeEndpointAnthropic(ctx context.Context, client *http.Client, urls []str
 			_ = resp.Body.Close()
 			return true, "200 OK (Supported)"
 		}
-		body, readErr := readAllLimited(resp.Body, maxErrorBodyBytes)
-		_ = resp.Body.Close()
-		if readErr != nil {
-			return false, fmt.Sprintf("Response read error: %v", readErr)
-		}
 
-		bodyStr := string(body)
-		errSnippet := extractErrorMessage(bodyStr)
-		if errSnippet == "" {
-			errSnippet = resp.Status
-		} else {
-			errSnippet = fmt.Sprintf("%d %s", resp.StatusCode, errSnippet)
-		}
+		errSnippet := readProbeStatus(resp)
 		if !statusAllowsEndpointFallback(resp.StatusCode) {
 			return false, errSnippet
 		}

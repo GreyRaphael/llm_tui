@@ -37,6 +37,9 @@
   - 自动适配 OpenAI Chat (`reasoning_effort`)、OpenAI Responses (`reasoning`) 与 Anthropic Messages (`output_config.effort`) 规范。
 - **⚡ 实时 SSE 流式传输与思考过程 (Reasoning Process) 可视化**:
   - 原生支持基于 HTTP SSE (`text/event-stream`) 的打字机式实时流式渲染。
+  - 对代理错误标注为 `application/json` 的 SSE 流，通过嗅探首行仍可识别并保持增量渲染。
+  - 返回完整 JSON 文档的响应会作为单个最终分片渲染；多文档换行分隔 JSON（NDJSON）**不支持**，会以解码错误形式提示。
+  - 请求超时（内置 120s 上限）会明确报错，而用户主动取消则静默结束。
   - 自动识别 `"stream": true/false`（亦可随时按 `Alt+S` 手动切换）：非流式展示 Pretty JSON，流式自动提炼并独立高亮 **💭 思考过程 (Thinking Process)** 与 **💬 响应内容 (Response Content)**。
 - **🎨 终端 Glamour Markdown 渲染与代码高亮**:
   - 集成 Charm `glamour` 终端 Markdown 渲染引擎。
@@ -70,7 +73,7 @@
 
 ### 方式二：从源码编译
 
-开发环境需要 Go 1.27.3+：
+开发环境需要 Go 1.26.0+：
 
 ```bash
 git clone https://github.com/GreyRaphael/llm_tui.git

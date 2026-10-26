@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -711,6 +712,42 @@ func TestExecuteStreamRequestCompleteJSONResponses(t *testing.T) {
 	}
 }
 
+func TestExecuteStreamRequestRejectsNewlineDelimitedJSON(t *testing.T) {
+	// NDJSON (one JSON document per line) is deliberately unsupported: the whole
+	// body is treated as a single document, so the trailing objects are reported
+	// as an error rather than silently emitting partial content.
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("{\"choices\":[{\"message\":{\"content\":\"a\"}}]}\n"))
+		_, _ = w.Write([]byte("{\"choices\":[{\"message\":{\"content\":\"b\"}}]}\n"))
+	}))
+	defer server.Close()
+
+	ch := make(chan StreamChunkMsg, 20)
+	go ExecuteStreamRequest(context.Background(), server.URL, "", APITypeOpenAIChat, `{"model":"test"}`, ch)
+
+	var content strings.Builder
+	var streamErr error
+	var done bool
+	for msg := range ch {
+		content.WriteString(msg.ContentDelta)
+		if msg.Err != nil {
+			streamErr = msg.Err
+		}
+		done = done || msg.Done
+	}
+	if content.Len() != 0 {
+		t.Fatalf("NDJSON must not be partially rendered, got %q", content.String())
+	}
+	if streamErr == nil || !strings.Contains(streamErr.Error(), "decode JSON response") {
+		t.Fatalf("expected a decode error for NDJSON, got %v", streamErr)
+	}
+	if !done {
+		t.Fatal("expected the failed decode to terminate the stream")
+	}
+}
+
 func TestExecuteStreamRequestRejectsImageStreaming(t *testing.T) {
 	ch := make(chan StreamChunkMsg, 1)
 	ExecuteStreamRequest(context.Background(), "http://localhost", "", APITypeOpenAIImages, `{}`, ch)
@@ -1005,6 +1042,182 @@ func TestProbeFallsBackWhenPathIsMissingOrUnsupported(t *testing.T) {
 				t.Fatalf("expected Anthropic probe to try both URLs, got %d requests", got)
 			}
 		})
+	}
+}
+
+func TestProbeFallsBackWhenErrorBodyCannotBeDrained(t *testing.T) {
+	// A 404/405 error body that is oversized, truncated, or stalled must not
+	// abort the fallback chain: the probe only needs the status line, and the
+	// next candidate URL has to be tried anyway.
+	truncate := func(w http.ResponseWriter) {
+		conn, buf, err := w.(http.Hijacker).Hijack()
+		if err != nil {
+			t.Errorf("hijack failed: %v", err)
+			return
+		}
+		_, _ = buf.WriteString("HTTP/1.1 404 Not Found\r\nContent-Length: 100\r\n\r\npartial")
+		_ = buf.Flush()
+		_ = conn.Close()
+	}
+
+	tests := []struct {
+		name    string
+		failure func(w http.ResponseWriter)
+	}{
+		{
+			name: "oversized",
+			failure: func(w http.ResponseWriter) {
+				w.WriteHeader(http.StatusNotFound)
+				_, _ = w.Write([]byte(strings.Repeat("x", int(maxErrorBodyBytes)+1)))
+			},
+		},
+		{
+			name:    "truncated",
+			failure: truncate,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var requests int32
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				atomic.AddInt32(&requests, 1)
+				if strings.HasPrefix(r.URL.Path, "/v1/") {
+					tt.failure(w)
+					return
+				}
+				w.WriteHeader(http.StatusOK)
+			}))
+			defer server.Close()
+
+			openAIURLs := []string{server.URL + "/v1/chat/completions", server.URL + "/chat/completions"}
+			if supported, msg := probeEndpoint(context.Background(), server.Client(), openAIURLs, "Authorization", "", nil); !supported {
+				t.Fatalf("undrainable 404 body must not abort the OpenAI fallback chain, got %q", msg)
+			}
+			if got := atomic.LoadInt32(&requests); got != 2 {
+				t.Fatalf("expected both candidate URLs to be probed, got %d requests", got)
+			}
+
+			atomic.StoreInt32(&requests, 0)
+			anthropicURLs := []string{server.URL + "/v1/messages", server.URL + "/messages"}
+			if supported, msg := probeEndpointAnthropic(context.Background(), server.Client(), anthropicURLs, "", nil); !supported {
+				t.Fatalf("undrainable 404 body must not abort the Anthropic fallback chain, got %q", msg)
+			}
+			if got := atomic.LoadInt32(&requests); got != 2 {
+				t.Fatalf("expected both candidate URLs to be probed, got %d requests", got)
+			}
+		})
+	}
+}
+
+func TestProbeKeepsStatusLineWhenErrorBodyIsTooLarge(t *testing.T) {
+	// When the body cannot be read the status line must still be reported, and
+	// a definitive (non-404/405) status must not trigger another candidate.
+	var requests int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt32(&requests, 1)
+		w.WriteHeader(http.StatusUnauthorized)
+		_, _ = w.Write([]byte(strings.Repeat("y", int(maxErrorBodyBytes)+1)))
+	}))
+	defer server.Close()
+
+	urls := []string{server.URL + "/v1/chat/completions", server.URL + "/chat/completions"}
+	supported, msg := probeEndpoint(context.Background(), server.Client(), urls, "Authorization", "", nil)
+	if supported {
+		t.Fatal("expected the unauthorized probe to fail")
+	}
+	if !strings.Contains(msg, "401") {
+		t.Fatalf("expected the status line to be reported, got %q", msg)
+	}
+	if got := atomic.LoadInt32(&requests); got != 1 {
+		t.Fatalf("expected a definitive 401 to stop the chain, got %d requests", got)
+	}
+}
+
+func TestExecuteStreamRequestReportsDeadline(t *testing.T) {
+	// An internal deadline (the 120s safety cap, or a caller-imposed timeout) is
+	// a real failure: the stream must end with an error instead of looking like
+	// a completed response that simply stopped early.
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(http.StatusOK)
+		flusher, ok := w.(http.Flusher)
+		if !ok {
+			return
+		}
+		_, _ = w.Write([]byte("data: {\"choices\":[{\"delta\":{\"content\":\"partial\"}}]}\n\n"))
+		flusher.Flush()
+		<-r.Context().Done()
+	}))
+	defer server.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+	defer cancel()
+
+	ch := make(chan StreamChunkMsg, 20)
+	go ExecuteStreamRequest(ctx, server.URL, "", APITypeOpenAIChat, `{"model":"test","stream":true}`, ch)
+
+	var content strings.Builder
+	var streamErr error
+	var done bool
+	for msg := range ch {
+		content.WriteString(msg.ContentDelta)
+		if msg.Err != nil {
+			streamErr = msg.Err
+		}
+		done = done || msg.Done
+	}
+	if content.String() != "partial" {
+		t.Fatalf("expected partial content before the deadline, got %q", content.String())
+	}
+	if streamErr == nil || !errors.Is(streamErr, context.DeadlineExceeded) {
+		t.Fatalf("expected deadline error to be reported, got %v", streamErr)
+	}
+	if !done {
+		t.Fatal("expected the deadline to terminate the stream with Done: true")
+	}
+}
+
+func TestExecuteStreamRequestDoesNotReportUserCancellation(t *testing.T) {
+	// User-initiated cancellation (leaving the screen, superseding a request)
+	// stays silent so the TUI does not flash an error the user caused.
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(http.StatusOK)
+		flusher, ok := w.(http.Flusher)
+		if !ok {
+			return
+		}
+		_, _ = w.Write([]byte("data: {\"choices\":[{\"delta\":{\"content\":\"partial\"}}]}\n\n"))
+		flusher.Flush()
+		<-r.Context().Done()
+	}))
+	defer server.Close()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	ch := make(chan StreamChunkMsg, 20)
+	go ExecuteStreamRequest(ctx, server.URL, "", APITypeOpenAIChat, `{"model":"test","stream":true}`, ch)
+
+	var content strings.Builder
+	for content.Len() == 0 {
+		msg, ok := <-ch
+		if !ok {
+			t.Fatal("stream closed before any delta arrived")
+		}
+		if msg.Err != nil {
+			t.Fatalf("unexpected stream error: %v", msg.Err)
+		}
+		content.WriteString(msg.ContentDelta)
+	}
+	if content.String() != "partial" {
+		t.Fatalf("expected first delta, got %q", content.String())
+	}
+	cancel()
+
+	for msg := range ch {
+		if msg.Err != nil {
+			t.Fatalf("user cancellation must not be reported as an error, got %v", msg.Err)
+		}
 	}
 }
 

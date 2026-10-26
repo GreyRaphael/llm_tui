@@ -52,6 +52,21 @@ func TestSniffSSEStream(t *testing.T) {
 			body:    "upstream connect error",
 			wantSSE: false,
 		},
+		{
+			name:    "sse with long keep-alive preamble",
+			body:    strings.Repeat(": keep-alive\n", 300) + "data: {\"choices\":[]}\n",
+			wantSSE: true,
+		},
+		{
+			name:    "preamble exceeds sniff window",
+			body:    strings.Repeat(": keep-alive\n", 400) + "data: {\"choices\":[]}\n",
+			wantSSE: false,
+		},
+		{
+			name:    "ndjson is one unsupported document",
+			body:    "{\"a\":1}\n{\"b\":2}\n",
+			wantSSE: false,
+		},
 	}
 
 	for _, tt := range tests {

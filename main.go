@@ -2,7 +2,7 @@ package main
 
 import (
 	"fmt"
-	"log"
+	"io"
 	"os"
 
 	"llm_tui/internal/db"
@@ -11,32 +11,54 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 )
 
-// Version can be set at build time via -ldflags="-X main.Version=v1.10.1"
-var Version = "v1.10.1"
+// Version can be set at build time via -ldflags="-X main.Version=v1.11.0"
+var Version = "v1.11.0"
 
-func main() {
-	if len(os.Args) > 1 {
-		arg := os.Args[1]
-		if arg == "-v" || arg == "--version" || arg == "version" || arg == "-version" {
-			fmt.Printf("llm_tui version %s\n", Version)
-			os.Exit(0)
-		}
+// programStarter launches the TUI for an initialized database. It is a seam so
+// run's startup and error handling can be tested without a real terminal.
+type programStarter func(database *db.DB, version string) error
+
+// printVersionIfRequested writes the version for -v/--version/version/-version
+// arguments and reports whether the program should stop.
+func printVersionIfRequested(args []string, out io.Writer) bool {
+	if len(args) == 0 {
+		return false
+	}
+	switch args[0] {
+	case "-v", "--version", "version", "-version":
+		fmt.Fprintf(out, "llm_tui version %s\n", Version)
+		return true
+	}
+	return false
+}
+
+// run executes one program invocation and returns the process exit code.
+func run(args []string, out, errOut io.Writer, dbPath string, start programStarter) int {
+	if printVersionIfRequested(args, out) {
+		return 0
 	}
 
-	// Initialize SQLite database located in executable directory
-	dbPath := db.GetDefaultDBPath()
 	database, err := db.InitDB(dbPath)
 	if err != nil {
-		log.Fatalf("Failed to initialize SQLite database at %s: %v", dbPath, err)
+		fmt.Fprintf(errOut, "Failed to initialize SQLite database at %s: %v\n", dbPath, err)
+		return 1
 	}
 	defer database.Close()
 
-	// Launch Bubbletea TUI application
-	app := tui.NewAppModel(database, Version)
-	p := tea.NewProgram(app, tea.WithAltScreen())
-
-	if _, err := p.Run(); err != nil {
-		fmt.Printf("Error running LLM Provider TUI: %v\n", err)
-		os.Exit(1)
+	if err := start(database, Version); err != nil {
+		fmt.Fprintf(errOut, "Error running LLM Provider TUI: %v\n", err)
+		return 1
 	}
+	return 0
+}
+
+// runProgram starts the Bubbletea UI in the alternate screen buffer.
+func runProgram(database *db.DB, version string) error {
+	p := tea.NewProgram(tui.NewAppModel(database, version), tea.WithAltScreen())
+	_, err := p.Run()
+	return err
+}
+
+func main() {
+	os.Exit(run(os.Args[1:], os.Stdout, os.Stderr, db.GetDefaultDBPath(), runProgram))
 }

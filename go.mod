@@ -1,6 +1,6 @@
 module llm_tui
 
-go 1.27.3
+go 1.26.0
 
 require (
 	github.com/aymanbagabas/go-osc52/v2 v2.0.1

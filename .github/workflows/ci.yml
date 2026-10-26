@@ -38,7 +38,19 @@ jobs:
         run: go run honnef.co/go/tools/cmd/staticcheck@v0.8.2 ./...
 
       - name: Run Unit Tests with Race Detector
-        run: go test -race ./...
+        run: |
+          set -o pipefail
+          go test -race -covermode=atomic -cover ./... | tee coverage.txt
+
+      - name: Enforce Coverage Thresholds
+        run: ./scripts/check_coverage.sh coverage.txt
+
+      - name: Upload Coverage Report
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage
+          path: coverage.txt
+          if-no-files-found: error
 
       - name: Build Binary
         run: go build -v -o llm_tui .

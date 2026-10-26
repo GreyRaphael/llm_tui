@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -85,18 +86,11 @@ func bufferFallbackResponse(resp *http.Response) *http.Response {
 	// ContentLength is -1 when the length is unknown (e.g. chunked errors); only
 	// skip draining when the provider declares a body that is already too large.
 	if resp.ContentLength <= maxErrorBodyBytes {
-		networkBody := resp.Body
-		drained := make(chan []byte, 1)
-		go func() {
-			b, _ := readAllLimited(networkBody, maxErrorBodyBytes)
-			drained <- b
-		}()
-		select {
-		case body = <-drained:
-		case <-time.After(fallbackDrainTimeout):
-			// The read may still be blocked; closing below unblocks it.
+		if drained, complete := drainErrorBody(resp.Body, maxErrorBodyBytes); complete {
+			body = drained
 		}
 	}
+	// Closing unblocks a drain that timed out, releasing the connection.
 	_ = resp.Body.Close()
 	if body == nil {
 		body = []byte(resp.Status)
@@ -209,6 +203,16 @@ func ExecuteStreamRequest(ctx context.Context, baseURL, apiKey, apiType, payload
 	}
 	if err != nil {
 		if ctx.Err() != nil {
+			// A user-initiated cancellation (leaving the screen, superseding the
+			// request) ends silently. An internal deadline is a real failure the
+			// user must see, so report it even though ctx can no longer be used
+			// for delivery.
+			if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+				sendTerminalChunk(msgChan, StreamChunkMsg{
+					Err:  fmt.Errorf("stream response error: %w", ctx.Err()),
+					Done: true,
+				})
+			}
 			return
 		}
 		sendChunk(ctx, msgChan, StreamChunkMsg{Err: fmt.Errorf("stream response error: %v", err), Done: true})
@@ -257,6 +261,22 @@ func sendChunk(ctx context.Context, ch chan<- StreamChunkMsg, msg StreamChunkMsg
 	case ch <- msg:
 		return true
 	case <-ctx.Done():
+		return false
+	}
+}
+
+// sendTerminalChunk delivers a final message after the request context has
+// already expired. Delivery is bounded by terminalChunkGrace so the goroutine
+// still cannot leak when nobody reads the channel; on expiry the message is
+// dropped, which is equivalent to the previous silent behaviour.
+func sendTerminalChunk(ch chan<- StreamChunkMsg, msg StreamChunkMsg) bool {
+	timer := time.NewTimer(terminalChunkGrace)
+	defer timer.Stop()
+
+	select {
+	case ch <- msg:
+		return true
+	case <-timer.C:
 		return false
 	}
 }
