@@ -23,6 +23,10 @@ jobs:
       - name: Prepare Release Notes
         id: release_notes
         run: |
+          # actions/checkout can rewrite the tag ref as a lightweight tag when it
+          # points at the checked-out commit, losing the annotation. Re-fetch the
+          # real tag object before reading its message.
+          git fetch --force origin "refs/tags/${GITHUB_REF_NAME}:refs/tags/${GITHUB_REF_NAME}"
           git tag -l --format='%(contents)' "${GITHUB_REF_NAME}" > release-notes.md
           if [ -s release-notes.md ]; then
             echo "has_notes=true" >> "$GITHUB_OUTPUT"
