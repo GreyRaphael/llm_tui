@@ -209,13 +209,18 @@ func ExecuteStreamRequest(ctx context.Context, baseURL, apiKey, apiType, payload
 			// for delivery.
 			if errors.Is(ctx.Err(), context.DeadlineExceeded) {
 				sendTerminalChunk(msgChan, StreamChunkMsg{
-					Err:  fmt.Errorf("stream response error: %w", ctx.Err()),
-					Done: true,
+					Latency: time.Since(startTime),
+					Err:     fmt.Errorf("stream response error: %w", ctx.Err()),
+					Done:    true,
 				})
 			}
 			return
 		}
-		sendChunk(ctx, msgChan, StreamChunkMsg{Err: fmt.Errorf("stream response error: %v", err), Done: true})
+		sendChunk(ctx, msgChan, StreamChunkMsg{
+			Latency: time.Since(startTime),
+			Err:     fmt.Errorf("stream response error: %v", err),
+			Done:    true,
+		})
 		return
 	}
 

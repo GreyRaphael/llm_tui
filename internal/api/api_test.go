@@ -729,11 +729,13 @@ func TestExecuteStreamRequestRejectsNewlineDelimitedJSON(t *testing.T) {
 
 	var content strings.Builder
 	var streamErr error
+	var errLatency time.Duration
 	var done bool
 	for msg := range ch {
 		content.WriteString(msg.ContentDelta)
 		if msg.Err != nil {
 			streamErr = msg.Err
+			errLatency = msg.Latency
 		}
 		done = done || msg.Done
 	}
@@ -742,6 +744,9 @@ func TestExecuteStreamRequestRejectsNewlineDelimitedJSON(t *testing.T) {
 	}
 	if streamErr == nil || !strings.Contains(streamErr.Error(), "decode JSON response") {
 		t.Fatalf("expected a decode error for NDJSON, got %v", streamErr)
+	}
+	if errLatency <= 0 {
+		t.Fatalf("expected terminal error chunk to carry elapsed latency, got %v", errLatency)
 	}
 	if !done {
 		t.Fatal("expected the failed decode to terminate the stream")
@@ -1159,11 +1164,13 @@ func TestExecuteStreamRequestReportsDeadline(t *testing.T) {
 
 	var content strings.Builder
 	var streamErr error
+	var errLatency time.Duration
 	var done bool
 	for msg := range ch {
 		content.WriteString(msg.ContentDelta)
 		if msg.Err != nil {
 			streamErr = msg.Err
+			errLatency = msg.Latency
 		}
 		done = done || msg.Done
 	}
@@ -1172,6 +1179,9 @@ func TestExecuteStreamRequestReportsDeadline(t *testing.T) {
 	}
 	if streamErr == nil || !errors.Is(streamErr, context.DeadlineExceeded) {
 		t.Fatalf("expected deadline error to be reported, got %v", streamErr)
+	}
+	if errLatency <= 0 {
+		t.Fatalf("expected deadline chunk to report elapsed latency, got %v", errLatency)
 	}
 	if !done {
 		t.Fatal("expected the deadline to terminate the stream with Done: true")
