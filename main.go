@@ -11,8 +11,8 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 )
 
-// Version can be set at build time via -ldflags="-X main.Version=v1.11.0"
-var Version = "v1.11.0"
+// Version can be set at build time via -ldflags="-X main.Version=v1.11.1"
+var Version = "v1.11.1"
 
 // programStarter launches the TUI for an initialized database. It is a seam so
 // run's startup and error handling can be tested without a real terminal.
