@@ -5,36 +5,28 @@ import (
 	"fmt"
 	"strings"
 	"time"
-)
 
-// ReasoningEffort constants
-const (
-	ReasoningEffortNone   = "none"
-	ReasoningEffortLow    = "low"
-	ReasoningEffortMedium = "medium"
-	ReasoningEffortHigh   = "high"
-	ReasoningEffortXHigh  = "xhigh"
-	ReasoningEffortMax    = "max"
+	"llm_tui/internal/api"
 )
 
 // ProviderRecord represents a saved configuration record in SQLite
 type ProviderRecord struct {
-	ID              int64     `json:"id"`
-	Name            string    `json:"name"`
-	BaseURL         string    `json:"base_url"`
-	APIKey          string    `json:"api_key"`
-	APIType         string    `json:"api_type"`
-	Model           string    `json:"model"`
-	ReasoningEffort string    `json:"reasoning_effort"`
-	CustomPayload   string    `json:"custom_payload"`
-	CreatedAt       time.Time `json:"created_at"`
-	UpdatedAt       time.Time `json:"updated_at"`
+	ID              int64
+	Name            string
+	BaseURL         string
+	APIKey          string
+	APIType         string
+	Model           string
+	ReasoningEffort string
+	CustomPayload   string
+	CreatedAt       time.Time
+	UpdatedAt       time.Time
 }
 
 // CreateRecord inserts a new provider record into SQLite
 func (d *DB) CreateRecord(rec *ProviderRecord) error {
 	if rec.ReasoningEffort == "" {
-		rec.ReasoningEffort = ReasoningEffortNone
+		rec.ReasoningEffort = api.ReasoningEffortNone
 	}
 	now := time.Now()
 	query := `

@@ -39,8 +39,9 @@ func TestPaneDimensions(t *testing.T) {
 		wantWidth  int
 		wantHeight int
 	}{
-		{name: "minimums", width: 0, height: 0, wantWidth: 40, wantHeight: 16},
-		{name: "narrow", width: 50, height: 30, wantWidth: 40, wantHeight: 17},
+		{name: "uninitialized defaults", width: 0, height: 0, wantWidth: 40, wantHeight: 16},
+		{name: "narrow", width: 50, height: 30, wantWidth: 22, wantHeight: 17},
+		{name: "very narrow clamps to floor", width: 20, height: 15, wantWidth: 12, wantHeight: 6},
 		{name: "wide", width: 100, height: 40, wantWidth: 47, wantHeight: 27},
 	}
 

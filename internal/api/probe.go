@@ -2,6 +2,7 @@ package api
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -9,11 +10,13 @@ import (
 	"net"
 	"net/http"
 	"net/url"
-	"sort"
+	"slices"
 	"strings"
 	"sync"
 	"time"
 )
+
+var probeHTTPClient = &http.Client{Timeout: 30 * time.Second}
 
 // NormalizeURL cleans up base_url strings (removes trailing slashes, ensures http/https)
 func NormalizeURL(baseURL string) string {
@@ -78,89 +81,74 @@ func ProbeProviderWithModel(ctx context.Context, baseURL, apiKey, modelName stri
 		return nil, fmt.Errorf("invalid base URL")
 	}
 	result := &ProbeResult{
-		BaseURL:         norm,
-		APIKey:          apiKey,
 		EndpointDetails: make(map[string]string),
 	}
 
-	if modelName == "" {
-		modelName = "gpt-4o"
-	}
+	modelName = cmp.Or(modelName, "gpt-4o")
 
 	ctx, cancel := context.WithTimeout(ctx, 35*time.Second)
 	defer cancel()
 
-	client := &http.Client{Timeout: 30 * time.Second}
-
-	var wg sync.WaitGroup
-	var mu sync.Mutex
-
-	// Helper to add supported type
-	addResult := func(apiType, statusMsg string, supported bool) {
-		mu.Lock()
-		defer mu.Unlock()
-		result.EndpointDetails[apiType] = statusMsg
-		if supported {
-			result.SupportedAPITypes = append(result.SupportedAPITypes, apiType)
-		}
+	type probeSpec struct {
+		apiType string
+		path    string
+		payload map[string]any
+	}
+	specs := []probeSpec{
+		{
+			apiType: APITypeOpenAIChat,
+			path:    "/chat/completions",
+			payload: map[string]any{
+				"model": modelName,
+				"messages": []map[string]string{
+					{"role": "user", "content": "hi"},
+				},
+			},
+		},
+		{
+			apiType: APITypeOpenAIResponses,
+			path:    "/responses",
+			payload: map[string]any{
+				"model": modelName,
+				"input": "hi",
+			},
+		},
+		{
+			apiType: APITypeAnthropic,
+			path:    "/messages",
+			payload: map[string]any{
+				"model": modelName,
+				"messages": []map[string]string{
+					{"role": "user", "content": "hi"},
+				},
+				"max_tokens": 16,
+			},
+		},
 	}
 
-	// 1. Probe OpenAI Chat API
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-		urls := BuildEndpointURLs(norm, "/chat/completions")
-		payload, _ := json.Marshal(map[string]interface{}{
-			"model": modelName,
-			"messages": []map[string]string{
-				{"role": "user", "content": "hi"},
-			},
+	type probeOutcome struct {
+		supported bool
+		msg       string
+	}
+	outcomes := make([]probeOutcome, len(specs))
+
+	var wg sync.WaitGroup
+	for i, spec := range specs {
+		wg.Go(func() {
+			urls := BuildEndpointURLs(norm, spec.path)
+			payload, _ := json.Marshal(spec.payload)
+			supported, msg := probeEndpoint(ctx, probeHTTPClient, urls, spec.apiType, apiKey, payload)
+			outcomes[i] = probeOutcome{supported: supported, msg: msg}
 		})
-
-		authVal := ""
-		if strings.TrimSpace(apiKey) != "" {
-			authVal = "Bearer " + apiKey
-		}
-		supported, msg := probeEndpoint(ctx, client, urls, "Authorization", authVal, payload)
-		addResult(APITypeOpenAIChat, msg, supported)
-	}()
-
-	// 2. Probe OpenAI Responses API
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-		urls := BuildEndpointURLs(norm, "/responses")
-		payload, _ := json.Marshal(map[string]interface{}{
-			"model": modelName,
-			"input": "hi",
-		})
-
-		authVal := ""
-		if strings.TrimSpace(apiKey) != "" {
-			authVal = "Bearer " + apiKey
-		}
-		supported, msg := probeEndpoint(ctx, client, urls, "Authorization", authVal, payload)
-		addResult(APITypeOpenAIResponses, msg, supported)
-	}()
-
-	// 3. Probe Anthropic Messages API
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-		urls := BuildEndpointURLs(norm, "/messages")
-		payload, _ := json.Marshal(map[string]interface{}{
-			"model": modelName,
-			"messages": []map[string]string{
-				{"role": "user", "content": "hi"},
-			},
-			"max_tokens": 16,
-		})
-
-		supported, msg := probeEndpointAnthropic(ctx, client, urls, apiKey, payload)
-		addResult(APITypeAnthropic, msg, supported)
-	}()
-
+	}
 	wg.Wait()
+
+	for i, spec := range specs {
+		result.EndpointDetails[spec.apiType] = outcomes[i].msg
+		if outcomes[i].supported {
+			result.SupportedAPITypes = append(result.SupportedAPITypes, spec.apiType)
+		}
+	}
 
 	return result, nil
 }
@@ -191,7 +179,7 @@ func readProbeStatus(resp *http.Response) string {
 	return fmt.Sprintf("%d %s", resp.StatusCode, snippet)
 }
 
-func probeEndpoint(ctx context.Context, client *http.Client, urls []string, authHeader, authVal string, payload []byte) (bool, string) {
+func probeEndpoint(ctx context.Context, client *http.Client, urls []string, apiType, apiKey string, payload []byte) (bool, string) {
 	var lastStatus string
 	for _, targetURL := range urls {
 		req, err := http.NewRequestWithContext(ctx, http.MethodPost, targetURL, bytes.NewReader(payload))
@@ -199,39 +187,9 @@ func probeEndpoint(ctx context.Context, client *http.Client, urls []string, auth
 			return false, err.Error()
 		}
 		req.Header.Set("Content-Type", "application/json")
-		if strings.TrimSpace(authVal) != "" {
-			req.Header.Set(authHeader, authVal)
-		}
-
-		resp, err := client.Do(req)
-		if err != nil {
-			return false, "Connection error: " + err.Error()
-		}
-		if resp.StatusCode == http.StatusOK {
-			_ = resp.Body.Close()
-			return true, "200 OK (Supported)"
-		}
-
-		errSnippet := readProbeStatus(resp)
-		if !statusAllowsEndpointFallback(resp.StatusCode) {
-			return false, errSnippet
-		}
-		lastStatus = errSnippet
-	}
-	return false, lastStatus
-}
-
-func probeEndpointAnthropic(ctx context.Context, client *http.Client, urls []string, apiKey string, payload []byte) (bool, string) {
-	var lastStatus string
-	for _, targetURL := range urls {
-		req, err := http.NewRequestWithContext(ctx, http.MethodPost, targetURL, bytes.NewReader(payload))
-		if err != nil {
-			return false, err.Error()
-		}
-		req.Header.Set("Content-Type", "application/json")
-		req.Header.Set("anthropic-version", "2023-06-01")
-		if strings.TrimSpace(apiKey) != "" {
-			req.Header.Set("x-api-key", apiKey)
+		setAuthHeaders(req.Header, apiType, apiKey)
+		if apiType == APITypeAnthropic {
+			req.Header.Set("anthropic-version", "2023-06-01")
 		}
 
 		resp, err := client.Do(req)
@@ -294,9 +252,7 @@ func FetchModels(ctx context.Context, baseURL, apiKey string) ([]string, error) 
 	if root := rootBaseURL(norm); root != "" && root != norm {
 		urls = append(urls, BuildEndpointURLs(root, "/models")...)
 	}
-	client := &http.Client{}
 	var requestErrors []error
-
 	for _, targetURL := range urls {
 		req, err := http.NewRequestWithContext(ctx, http.MethodGet, targetURL, nil)
 		if err != nil {
@@ -309,7 +265,7 @@ func FetchModels(ctx context.Context, baseURL, apiKey string) ([]string, error) 
 		}
 		req.Header.Set("anthropic-version", "2023-06-01")
 
-		resp, err := client.Do(req)
+		resp, err := requestHTTPClient.Do(req)
 		if err != nil {
 			requestErrors = append(requestErrors, fmt.Errorf("%s: %w", targetURL, err))
 			if ctx.Err() != nil {
@@ -341,7 +297,7 @@ func FetchModels(ctx context.Context, baseURL, apiKey string) ([]string, error) 
 			}
 		}
 		if len(models) > 0 {
-			sort.Strings(models)
+			slices.Sort(models)
 			return models, nil
 		}
 		requestErrors = append(requestErrors, fmt.Errorf("%s: empty model list", targetURL))

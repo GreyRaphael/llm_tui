@@ -97,11 +97,8 @@ func WriteAll(text string) error {
 	}
 }
 
-// writeNative runs the first working native writer for the platform. When none
-// is available it falls back to OSC 52 (macOS and Windows terminals both accept
-// it, and it keeps the command usable from a remote shell).
-func writeNative(text, goos string) error {
-	for _, tool := range nativeTools(goos, os.Getenv, false) {
+func writeWithTools(text, goos string, wsl bool) error {
+	for _, tool := range nativeTools(goos, os.Getenv, wsl) {
 		if runTool(tool, text) == nil {
 			return nil
 		}
@@ -109,16 +106,16 @@ func writeNative(text, goos string) error {
 	return writeOSC52(text)
 }
 
+// writeNative runs the first working native writer for the platform. When none
+// is available it falls back to OSC 52 (macOS and Windows terminals both accept
+// it, and it keeps the command usable from a remote shell).
+func writeNative(text, goos string) error {
+	return writeWithTools(text, goos, false)
+}
+
 // Linux / Unix implementation (WSL, Wayland, X11, OSC 52)
 func writeLinux(text string) error {
-	for _, tool := range nativeTools("linux", os.Getenv, isWSL()) {
-		if runTool(tool, text) == nil {
-			return nil
-		}
-	}
-
-	// OSC 52 fallback for SSH, remote terminals, tmux, and headless environments.
-	if err := writeOSC52(text); err == nil {
+	if writeWithTools(text, "linux", isWSL()) == nil {
 		return nil
 	}
 

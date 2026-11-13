@@ -1,5 +1,12 @@
 package views
 
+import (
+	"fmt"
+	"strings"
+
+	"llm_tui/internal/tui/styles"
+)
+
 func visibleWindow(cursor, total, maxVisible int) (int, int) {
 	if total <= 0 {
 		return 0, 0
@@ -23,13 +30,41 @@ func visibleWindow(cursor, total, maxVisible int) (int, int) {
 }
 
 func (m TesterModel) paneDimensions() (int, int) {
-	halfWidth := (m.Width - 6) / 2
-	if halfWidth < 35 {
-		halfWidth = 40
+	halfWidth := 40
+	if m.Width > 0 {
+		halfWidth = max(12, (m.Width-6)/2)
 	}
-	paneHeight := m.Height - 13
-	if paneHeight < 12 {
-		paneHeight = 16
+	paneHeight := 16
+	if m.Height > 0 {
+		paneHeight = max(6, m.Height-13)
 	}
 	return halfWidth, paneHeight
+}
+
+func renderStatusBanner(status string, isError bool) string {
+	if status == "" {
+		return ""
+	}
+	if isError {
+		return styles.ErrorStyle.Render("❌ "+status) + "\n\n"
+	}
+	return styles.SubtitleStyle.Render("ℹ️  "+status) + "\n\n"
+}
+
+func renderModelWindow(sb *strings.Builder, models []string, cursor, maxVisible int) {
+	total := len(models)
+	start, end := visibleWindow(cursor, total, maxVisible)
+	if start > 0 {
+		sb.WriteString(fmt.Sprintf("  ▲ %d models above...\n", start))
+	}
+	for i := start; i < end; i++ {
+		prefix := "  "
+		if i == cursor {
+			prefix = "👉"
+		}
+		sb.WriteString(fmt.Sprintf("%s %s\n", prefix, styles.MetricValueStyle.Render(models[i])))
+	}
+	if end < total {
+		sb.WriteString(fmt.Sprintf("  ▼ %d models below...\n", total-end))
+	}
 }

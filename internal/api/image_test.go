@@ -141,3 +141,35 @@ func TestOpenImageFileHeadless(t *testing.T) {
 		t.Errorf("expected error message to mention saved file path, got: %v", err)
 	}
 }
+
+func TestSaveImagesFromResponseUniqueFilenamesAndFormatDetection(t *testing.T) {
+	defer os.RemoveAll("./generated_images")
+
+	samplePNG := "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=="
+	rawJSON := fmt.Sprintf(`{"created": 1, "data": [{"b64_json": "%s"}]}`, samplePNG)
+
+	firstPaths, _, err := SaveImagesFromResponse(rawJSON, "same prompt")
+	if err != nil {
+		t.Fatalf("first save failed: %v", err)
+	}
+	secondPaths, _, err := SaveImagesFromResponse(rawJSON, "same prompt")
+	if err != nil {
+		t.Fatalf("second save failed: %v", err)
+	}
+	if len(firstPaths) != 1 || len(secondPaths) != 1 {
+		t.Fatalf("expected 1 path per call, got %v and %v", firstPaths, secondPaths)
+	}
+	if firstPaths[0] == secondPaths[0] {
+		t.Fatalf("expected same-second saves not to collide, both wrote %q", firstPaths[0])
+	}
+
+	if got := detectImageExtension([]byte{0xFF, 0xD8, 0xFF, 0xE0}); got != ".jpg" {
+		t.Errorf("expected .jpg for JPEG magic bytes, got %s", got)
+	}
+	if got := detectImageExtension([]byte("RIFF\x00\x00\x00\x00WEBP")); got != ".webp" {
+		t.Errorf("expected .webp for RIFF+WEBP magic bytes, got %s", got)
+	}
+	if got := detectImageExtension([]byte("RIFF\x00\x00\x00\x00WAVE")); got != ".png" {
+		t.Errorf("expected non-WEBP RIFF header not to be misclassified as .webp, got %s", got)
+	}
+}

@@ -14,7 +14,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 )
 
-func updateStreamChunk(m TesterModel, msg api.StreamChunkMsg) (TesterModel, tea.Cmd, string) {
+func updateStreamChunk(m TesterModel, msg api.StreamChunkMsg) (TesterModel, tea.Cmd, Action) {
 	if m.requestID == 0 {
 		m.requestID = nextRequestID()
 	}
@@ -225,7 +225,7 @@ func TestTesterModel_ReasoningEffortShortcuts(t *testing.T) {
 	m := NewTesterModel(database, rec)
 	m.Resize(120, 40)
 
-	if m.ReasoningEffort != db.ReasoningEffortNone {
+	if m.ReasoningEffort != api.ReasoningEffortNone {
 		t.Fatalf("expected initial reasoning effort 'none', got %q", m.ReasoningEffort)
 	}
 
@@ -244,12 +244,12 @@ func TestTesterModel_ReasoningEffortShortcuts(t *testing.T) {
 		runeChar rune
 		expected string
 	}{
-		{'2', db.ReasoningEffortLow},
-		{'3', db.ReasoningEffortMedium},
-		{'4', db.ReasoningEffortHigh},
-		{'5', db.ReasoningEffortXHigh},
-		{'6', db.ReasoningEffortMax},
-		{'1', db.ReasoningEffortNone},
+		{'2', api.ReasoningEffortLow},
+		{'3', api.ReasoningEffortMedium},
+		{'4', api.ReasoningEffortHigh},
+		{'5', api.ReasoningEffortXHigh},
+		{'6', api.ReasoningEffortMax},
+		{'1', api.ReasoningEffortNone},
 	}
 
 	for _, c := range cases {
@@ -257,7 +257,7 @@ func TestTesterModel_ReasoningEffortShortcuts(t *testing.T) {
 		if m.ReasoningEffort != c.expected {
 			t.Errorf("after Alt+%c, expected effort %q, got %q", c.runeChar, c.expected, m.ReasoningEffort)
 		}
-		if c.expected != db.ReasoningEffortNone {
+		if c.expected != api.ReasoningEffortNone {
 			if !strings.Contains(m.Textarea.Value(), fmt.Sprintf(`"reasoning_effort": %q`, c.expected)) {
 				t.Errorf("after Alt+%c, expected payload to contain reasoning_effort %q, got: %s", c.runeChar, c.expected, m.Textarea.Value())
 			}
@@ -422,7 +422,6 @@ func TestProbeModel_APITypeSwitchKeepsAliasInSync(t *testing.T) {
 	m.Step = StepSelectAPITypeAndName
 	m.SelectedModel = "deepseek-v4-flash"
 	m.ProbeResult = &api.ProbeResult{
-		BaseURL:           "https://api.example.com",
 		SupportedAPITypes: []string{api.APITypeOpenAIResponses, api.APITypeAnthropic},
 	}
 	m.SelectedAPIType = api.APITypeOpenAIResponses
@@ -465,7 +464,6 @@ func TestProbeModel_APITypeSwitchUpdatesLegacyAlias(t *testing.T) {
 	m.Step = StepSelectAPITypeAndName
 	m.SelectedModel = "deepseek-v4-flash"
 	m.ProbeResult = &api.ProbeResult{
-		BaseURL:           "https://api.example.com",
 		SupportedAPITypes: []string{api.APITypeOpenAIResponses, api.APITypeAnthropic},
 	}
 	m.SelectedAPIType = api.APITypeOpenAIResponses
@@ -490,7 +488,6 @@ func TestProbeModel_APITypeSwitchPreservesCustomName(t *testing.T) {
 	m.Step = StepSelectAPITypeAndName
 	m.SelectedModel = "deepseek-v4-flash"
 	m.ProbeResult = &api.ProbeResult{
-		BaseURL:           "https://api.example.com",
 		SupportedAPITypes: []string{api.APITypeOpenAIResponses, api.APITypeAnthropic},
 	}
 	m.SelectedAPIType = api.APITypeOpenAIResponses
@@ -1272,7 +1269,7 @@ func TestTesterModel_AspectRatioSwitch(t *testing.T) {
 		APIType:         api.APITypeOpenAIImages,
 		Model:           "gemini-3.1-flash-image",
 		CustomPayload:   api.GeneratePayloadTemplate(api.APITypeOpenAIImages, "gemini-3.1-flash-image", ""),
-		ReasoningEffort: db.ReasoningEffortNone,
+		ReasoningEffort: api.ReasoningEffortNone,
 	}
 	_ = database.CreateRecord(&rec)
 
@@ -1592,5 +1589,212 @@ func TestTesterModel_ModelSwitchAliasHandling(t *testing.T) {
 				t.Fatalf("expected persisted Name/Model %q/%q, got %q/%q", tt.wantName, "gpt-4o-mini", persisted.Name, persisted.Model)
 			}
 		})
+	}
+}
+
+func TestManagerModel_HandledKeysDoNotLeakToViewport(t *testing.T) {
+	database, err := db.InitDB(":memory:")
+	if err != nil {
+		t.Fatalf("failed to init memory db: %v", err)
+	}
+	defer database.Close()
+
+	for i := 1; i <= 10; i++ {
+		_ = database.CreateRecord(&db.ProviderRecord{
+			Name:    fmt.Sprintf("Provider %02d", i),
+			BaseURL: "https://api.example.com",
+			APIType: api.APITypeOpenAIChat,
+			Model:   "gpt-4o",
+		})
+	}
+
+	m := NewManagerModel(database, "v-test")
+	m.Resize(80, 15)
+
+	// Pressing 'd' must only trigger delete confirmation without invoking viewport's 'd' half-page-down.
+	m, _, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'d'}})
+	if !m.ConfirmDelete {
+		t.Fatal("expected ConfirmDelete to be true")
+	}
+	if m.Viewport.YOffset != 0 {
+		t.Fatalf("expected pressing 'd' not to scroll viewport, got YOffset=%d", m.Viewport.YOffset)
+	}
+
+	// Verify pgdown scrolls exactly one half-page (not doubled by falling through to Viewport.Update).
+	expectedVP := m.Viewport
+	expectedVP.HalfPageDown()
+	m, _, _ = m.Update(tea.KeyMsg{Type: tea.KeyPgDown})
+	// Re-apply status clear effect on height comparison via identical cursor/height:
+	if m.Viewport.YOffset > expectedVP.YOffset+2 || m.Viewport.YOffset == 0 {
+		t.Fatalf("unexpected pgdown YOffset %d (single HalfPageDown was %d)", m.Viewport.YOffset, expectedVP.YOffset)
+	}
+}
+
+func TestTesterModel_CtrlUDoesNotEditTextareaWithoutResponse(t *testing.T) {
+	database, err := db.InitDB(":memory:")
+	if err != nil {
+		t.Fatalf("failed to init memory db: %v", err)
+	}
+	defer database.Close()
+
+	m := NewTesterModel(database, db.ProviderRecord{
+		Name:    "Test",
+		BaseURL: "https://api.example.com",
+		APIType: api.APITypeOpenAIChat,
+		Model:   "gpt-4o",
+	})
+	m.Resize(100, 30)
+	initial := m.Textarea.Value()
+
+	m, _, _ = m.Update(tea.KeyMsg{Type: tea.KeyCtrlU})
+	if m.Textarea.Value() != initial {
+		t.Fatalf("Ctrl+U without response must not clear textarea payload; got %q", m.Textarea.Value())
+	}
+	if !strings.Contains(m.CopyStatusMsg, "no response") {
+		t.Fatalf("expected status message explaining empty response, got %q", m.CopyStatusMsg)
+	}
+}
+
+func TestTesterModel_PatchesPayloadInPlaceAndGuardsExecution(t *testing.T) {
+	database, err := db.InitDB(":memory:")
+	if err != nil {
+		t.Fatalf("failed to init memory db: %v", err)
+	}
+	defer database.Close()
+
+	customPayload := `{
+  "model": "gpt-4o",
+  "messages": [
+    {
+      "role": "user",
+      "content": "my custom prompt"
+    }
+  ],
+  "temperature": 0.2,
+  "stream": false
+}`
+	rec := db.ProviderRecord{
+		Name:          "Test",
+		BaseURL:       "https://api.example.com",
+		APIType:       api.APITypeOpenAIChat,
+		Model:         "gpt-4o",
+		CustomPayload: customPayload,
+	}
+	if err := database.CreateRecord(&rec); err != nil {
+		t.Fatalf("CreateRecord failed: %v", err)
+	}
+
+	m := NewTesterModel(database, rec)
+	m.DiscoveredModels = []string{"gpt-4o", "gpt-4o-mini"}
+	m.Resize(120, 40)
+
+	// Alt+4 should apply reasoning_effort while preserving custom prompt, temperature, and stream=false.
+	m, _, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'4'}, Alt: true})
+	if m.ReasoningEffort != api.ReasoningEffortHigh {
+		t.Fatalf("expected high reasoning effort, got %q", m.ReasoningEffort)
+	}
+	got := m.Textarea.Value()
+	for _, want := range []string{"my custom prompt", `"temperature": 0.2`, `"stream": false`, `"reasoning_effort": "high"`} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("expected patched payload to preserve %s, got:\n%s", want, got)
+		}
+	}
+
+	// Switch model via Alt+M and verify custom prompt and reasoning_effort are still preserved.
+	m, _, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'m'}, Alt: true})
+	m, _, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'j'}})
+	m, _, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	gotAfterModel := m.Textarea.Value()
+	for _, want := range []string{`"model": "gpt-4o-mini"`, "my custom prompt", `"reasoning_effort": "high"`, `"stream": false`} {
+		if !strings.Contains(gotAfterModel, want) {
+			t.Fatalf("expected model switch to preserve %s, got:\n%s", want, gotAfterModel)
+		}
+	}
+
+	// Guard Alt+S / Alt+M / Alt+2 while a request is executing.
+	m.IsExecuting = true
+	m, _, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'s'}, Alt: true})
+	if !strings.Contains(m.Textarea.Value(), `"stream": false`) {
+		t.Fatal("Alt+S should not toggle stream while request is executing")
+	}
+	m, _, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'2'}, Alt: true})
+	if m.ReasoningEffort != api.ReasoningEffortHigh {
+		t.Fatal("Alt+2 should not change reasoning effort while request is executing")
+	}
+
+	// Image providers reject reasoning effort shortcuts cleanly.
+	imgModel := NewTesterModel(database, db.ProviderRecord{
+		Name:    "img",
+		BaseURL: "https://api.example.com",
+		APIType: api.APITypeOpenAIImages,
+		Model:   "gpt-image-1",
+	})
+	imgModel, _, _ = imgModel.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'4'}, Alt: true})
+	if !strings.Contains(imgModel.CopyStatusMsg, "not applicable") {
+		t.Fatalf("expected image reasoning rejection message, got %q", imgModel.CopyStatusMsg)
+	}
+}
+
+func TestTesterModel_StreamRespectsUserScrollAndDisplaysTokens(t *testing.T) {
+	database, err := db.InitDB(":memory:")
+	if err != nil {
+		t.Fatalf("failed to init memory db: %v", err)
+	}
+	defer database.Close()
+
+	m := NewTesterModel(database, db.ProviderRecord{
+		Name:    "Test",
+		BaseURL: "https://api.example.com",
+		APIType: api.APITypeOpenAIChat,
+		Model:   "gpt-4o",
+	})
+	m.Resize(120, 24)
+	m.IsExecuting = true
+	m.IsStreamMode = true
+	m.ActivePane = PaneResponse
+	m.requestID = nextRequestID()
+
+	var longText strings.Builder
+	for i := 1; i <= 40; i++ {
+		longText.WriteString(fmt.Sprintf("streamed line %d\n\n", i))
+	}
+	m, _, _ = updateStreamChunk(m, api.StreamChunkMsg{
+		StatusCode:   200,
+		ContentDelta: longText.String(),
+	})
+	if m.Viewport.YOffset == 0 {
+		t.Fatal("expected initial long stream to auto-scroll to bottom")
+	}
+
+	// User scrolls up while streaming is active.
+	m, _, _ = m.Update(tea.KeyMsg{Type: tea.KeyPgUp})
+	if m.Viewport.AtBottom() {
+		t.Fatal("expected pgup to move viewport away from bottom during stream")
+	}
+	scrolledOffset := m.Viewport.YOffset
+
+	// Subsequent chunks must not yank the user back down.
+	m.LastStreamRender = time.Time{}
+	m, _, _ = updateStreamChunk(m, api.StreamChunkMsg{
+		ContentDelta:     "new line at end\n\n",
+		PromptTokens:     10,
+		CompletionTokens: 20,
+		TotalTokens:      30,
+		Latency:          500 * time.Millisecond,
+	})
+	if m.Viewport.YOffset != scrolledOffset {
+		t.Fatalf("expected YOffset to stay at %d when user scrolled up, got %d", scrolledOffset, m.Viewport.YOffset)
+	}
+
+	m, _, _ = updateStreamChunk(m, api.StreamChunkMsg{
+		Done:             true,
+		PromptTokens:     10,
+		CompletionTokens: 20,
+		TotalTokens:      30,
+		Latency:          time.Second,
+	})
+	view := m.View()
+	if !strings.Contains(view, "Tokens: 30(10+20)") {
+		t.Fatalf("expected completed view to display token metrics, got:\n%s", view)
 	}
 }

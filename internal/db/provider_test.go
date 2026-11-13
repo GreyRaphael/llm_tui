@@ -5,6 +5,8 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"llm_tui/internal/api"
 )
 
 func findRecordByID(t *testing.T, database *DB, id int64) *ProviderRecord {
@@ -45,7 +47,7 @@ func TestProviderRecordCRUD(t *testing.T) {
 		APIKey:          "sk-test123",
 		APIType:         "openai_chat",
 		Model:           "deepseek-chat",
-		ReasoningEffort: ReasoningEffortNone,
+		ReasoningEffort: api.ReasoningEffortNone,
 	}
 
 	err = database.CreateRecord(rec1)
@@ -93,7 +95,7 @@ func TestProviderRecordCRUD(t *testing.T) {
 		APIKey:          "sk-test123",
 		APIType:         "openai_chat",
 		Model:           "deepseek-reasoner",
-		ReasoningEffort: ReasoningEffortHigh,
+		ReasoningEffort: api.ReasoningEffortHigh,
 	}
 	err = database.CreateRecord(rec2)
 	if err != nil {
@@ -116,14 +118,14 @@ func TestProviderRecordCRUD(t *testing.T) {
 
 	// 6. Test Update
 	fetched.Name = "DeepSeek Chat Updated"
-	fetched.ReasoningEffort = ReasoningEffortLow
+	fetched.ReasoningEffort = api.ReasoningEffortLow
 	err = database.UpdateRecord(fetched)
 	if err != nil {
 		t.Fatalf("UpdateRecord failed: %v", err)
 	}
 
 	updated := findRecordByID(t, database, rec1.ID)
-	if updated.Name != "DeepSeek Chat Updated" || updated.ReasoningEffort != ReasoningEffortLow {
+	if updated.Name != "DeepSeek Chat Updated" || updated.ReasoningEffort != api.ReasoningEffortLow {
 		t.Fatalf("Update record verification failed: %+v", updated)
 	}
 
@@ -155,7 +157,7 @@ func TestProviderRecordEmptyAPIKey(t *testing.T) {
 		APIKey:          "",
 		APIType:         "openai_chat",
 		Model:           "my-model",
-		ReasoningEffort: ReasoningEffortNone,
+		ReasoningEffort: api.ReasoningEffortNone,
 	}
 	if err := database.CreateRecord(rec); err != nil {
 		t.Fatalf("CreateRecord with empty APIKey failed: %v", err)
@@ -245,7 +247,7 @@ func TestMigrateAPIKeyNotNull(t *testing.T) {
 		APIKey:          "",
 		APIType:         "openai_chat",
 		Model:           "model-x",
-		ReasoningEffort: ReasoningEffortNone,
+		ReasoningEffort: api.ReasoningEffortNone,
 	}); err != nil {
 		t.Fatalf("CreateRecord with empty api_key after migration failed: %v", err)
 	}

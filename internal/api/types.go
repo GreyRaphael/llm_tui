@@ -12,26 +12,43 @@ const (
 	APITypeOpenAIImages    = "openai_images"
 )
 
-// ProbeResult holds the auto-detection results for a provider base_url
+// ReasoningEffort constants define supported reasoning effort levels.
+const (
+	ReasoningEffortNone   = "none"
+	ReasoningEffortLow    = "low"
+	ReasoningEffortMedium = "medium"
+	ReasoningEffortHigh   = "high"
+	ReasoningEffortXHigh  = "xhigh"
+	ReasoningEffortMax    = "max"
+)
+
+// SupportedReasoningEfforts lists reasoning effort levels in Alt+1..Alt+6 order.
+var SupportedReasoningEfforts = [...]string{
+	ReasoningEffortNone,
+	ReasoningEffortLow,
+	ReasoningEffortMedium,
+	ReasoningEffortHigh,
+	ReasoningEffortXHigh,
+	ReasoningEffortMax,
+}
+
+// ProbeResult holds the auto-detection results for a provider endpoint.
 type ProbeResult struct {
-	BaseURL           string            `json:"base_url"`
-	APIKey            string            `json:"api_key"`
-	SupportedAPITypes []string          `json:"supported_api_types"`
-	DiscoveredModels  []string          `json:"discovered_models"`
-	EndpointDetails   map[string]string `json:"endpoint_details"`
+	SupportedAPITypes []string
+	EndpointDetails   map[string]string
 }
 
 // TestResult holds response metrics and body from sending a request to an LLM provider
 type TestResult struct {
-	StatusCode       int           `json:"status_code"`
-	Latency          time.Duration `json:"latency"`
-	PromptTokens     int           `json:"prompt_tokens"`
-	CompletionTokens int           `json:"completion_tokens"`
-	TotalTokens      int           `json:"total_tokens"`
-	FormattedBody    string        `json:"formatted_body"`
-	RawBody          string        `json:"raw_body"`
-	SavedImages      []string      `json:"saved_images,omitempty"`
-	Error            string        `json:"error,omitempty"`
+	StatusCode       int
+	Latency          time.Duration
+	PromptTokens     int
+	CompletionTokens int
+	TotalTokens      int
+	FormattedBody    string
+	RawBody          string
+	SavedImages      []string
+	Error            string
 }
 
 // ModelsResponse is used for parsing GET /models or GET /v1/models
@@ -43,13 +60,13 @@ type ModelsResponse struct {
 
 // StreamChunkMsg represents a real-time SSE stream delta sent to the TUI update loop
 type StreamChunkMsg struct {
-	ContentDelta     string        `json:"content_delta,omitempty"`
-	ReasoningDelta   string        `json:"reasoning_delta,omitempty"`
-	StatusCode       int           `json:"status_code,omitempty"`
-	Latency          time.Duration `json:"latency,omitempty"`
-	PromptTokens     int           `json:"prompt_tokens,omitempty"`
-	CompletionTokens int           `json:"completion_tokens,omitempty"`
-	TotalTokens      int           `json:"total_tokens,omitempty"`
-	Err              error         `json:"error,omitempty"`
-	Done             bool          `json:"done"`
+	ContentDelta     string
+	ReasoningDelta   string
+	StatusCode       int
+	Latency          time.Duration
+	PromptTokens     int
+	CompletionTokens int
+	TotalTokens      int
+	Err              error
+	Done             bool
 }

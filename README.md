@@ -18,8 +18,8 @@ Built using the **Charm.sh** ecosystem (`bubbletea`, `lipgloss`, `viewport`, `te
   - Concurrently probes text endpoints with realistic timeouts to detect active capabilities (`openai_chat`, `openai_responses`, `anthropic_messages`).
 - **🖼️ Dedicated AI Image Laboratory**:
   - Purpose-built interactive laboratory for `openai_images` models.
-  - Generates with token-saving, lowest-compute preset (`"aspect_ratio": "1:1"`) by default.
-  - **`Alt+A` Aspect Ratio Switcher**: Interactive selector sorted from smallest to largest compute size (`1:1`, `4:3`, `3:4`, `3:2`, `2:3`, `16:9`, `9:16`, `21:9`) with instant JSON update and persistence.
+  - Generates with token-saving, lowest-compute preset (`"size": "512x512"`, `1:1` 0.5K) by default.
+  - **`Alt+A` Size & Aspect Ratio Switcher**: Interactive selector with 32 presets across `0.5K`, `1K`, `2K`, and `4K` tiers (`1:1`, `4:3`, `3:4`, `3:2`, `2:3`, `16:9`, `9:16`, `21:9`) with instant JSON update and persistence.
   - **Auto-Saving & Anti-Lag Optimization**: Automatically decodes Base64 data and writes image files to `./generated_images/` (`YYYYMMDD_HHMMSS_<prompt_slug>.png/.jpg`) while rendering concise summaries in the viewport to keep the terminal smooth.
   - **`Ctrl+O` Quick Open**: Press `Ctrl+O` to instantly open the latest generated image in your operating system's default viewer.
 - **💾 Pure Go SQLite Storage (CGO-Free)**:

@@ -998,7 +998,7 @@ func TestProbeDoesNotFallbackAfterHTTPError(t *testing.T) {
 			defer server.Close()
 
 			urls := []string{server.URL + "/v1/chat/completions", server.URL + "/chat/completions"}
-			if supported, _ := probeEndpoint(context.Background(), server.Client(), urls, "Authorization", "", nil); supported {
+			if supported, _ := probeEndpoint(context.Background(), server.Client(), urls, APITypeOpenAIChat, "", nil); supported {
 				t.Fatal("expected failed probe")
 			}
 			if got := atomic.LoadInt32(&requests); got != 1 {
@@ -1006,7 +1006,7 @@ func TestProbeDoesNotFallbackAfterHTTPError(t *testing.T) {
 			}
 
 			atomic.StoreInt32(&requests, 0)
-			if supported, _ := probeEndpointAnthropic(context.Background(), server.Client(), urls, "", nil); supported {
+			if supported, _ := probeEndpoint(context.Background(), server.Client(), urls, APITypeAnthropic, "", nil); supported {
 				t.Fatal("expected failed Anthropic probe")
 			}
 			if got := atomic.LoadInt32(&requests); got != 1 {
@@ -1031,7 +1031,7 @@ func TestProbeFallsBackWhenPathIsMissingOrUnsupported(t *testing.T) {
 			defer server.Close()
 
 			openAIURLs := []string{server.URL + "/v1/chat/completions", server.URL + "/chat/completions"}
-			if supported, msg := probeEndpoint(context.Background(), server.Client(), openAIURLs, "Authorization", "", nil); !supported {
+			if supported, msg := probeEndpoint(context.Background(), server.Client(), openAIURLs, APITypeOpenAIChat, "", nil); !supported {
 				t.Fatalf("expected OpenAI probe to fall back to root, got %q", msg)
 			}
 			if got := atomic.LoadInt32(&requests); got != 2 {
@@ -1040,7 +1040,7 @@ func TestProbeFallsBackWhenPathIsMissingOrUnsupported(t *testing.T) {
 
 			atomic.StoreInt32(&requests, 0)
 			anthropicURLs := []string{server.URL + "/v1/messages", server.URL + "/messages"}
-			if supported, msg := probeEndpointAnthropic(context.Background(), server.Client(), anthropicURLs, "", nil); !supported {
+			if supported, msg := probeEndpoint(context.Background(), server.Client(), anthropicURLs, APITypeAnthropic, "", nil); !supported {
 				t.Fatalf("expected Anthropic probe to fall back to root, got %q", msg)
 			}
 			if got := atomic.LoadInt32(&requests); got != 2 {
@@ -1096,7 +1096,7 @@ func TestProbeFallsBackWhenErrorBodyCannotBeDrained(t *testing.T) {
 			defer server.Close()
 
 			openAIURLs := []string{server.URL + "/v1/chat/completions", server.URL + "/chat/completions"}
-			if supported, msg := probeEndpoint(context.Background(), server.Client(), openAIURLs, "Authorization", "", nil); !supported {
+			if supported, msg := probeEndpoint(context.Background(), server.Client(), openAIURLs, APITypeOpenAIChat, "", nil); !supported {
 				t.Fatalf("undrainable 404 body must not abort the OpenAI fallback chain, got %q", msg)
 			}
 			if got := atomic.LoadInt32(&requests); got != 2 {
@@ -1105,7 +1105,7 @@ func TestProbeFallsBackWhenErrorBodyCannotBeDrained(t *testing.T) {
 
 			atomic.StoreInt32(&requests, 0)
 			anthropicURLs := []string{server.URL + "/v1/messages", server.URL + "/messages"}
-			if supported, msg := probeEndpointAnthropic(context.Background(), server.Client(), anthropicURLs, "", nil); !supported {
+			if supported, msg := probeEndpoint(context.Background(), server.Client(), anthropicURLs, APITypeAnthropic, "", nil); !supported {
 				t.Fatalf("undrainable 404 body must not abort the Anthropic fallback chain, got %q", msg)
 			}
 			if got := atomic.LoadInt32(&requests); got != 2 {
@@ -1127,7 +1127,7 @@ func TestProbeKeepsStatusLineWhenErrorBodyIsTooLarge(t *testing.T) {
 	defer server.Close()
 
 	urls := []string{server.URL + "/v1/chat/completions", server.URL + "/chat/completions"}
-	supported, msg := probeEndpoint(context.Background(), server.Client(), urls, "Authorization", "", nil)
+	supported, msg := probeEndpoint(context.Background(), server.Client(), urls, APITypeOpenAIChat, "", nil)
 	if supported {
 		t.Fatal("expected the unauthorized probe to fail")
 	}
@@ -1339,5 +1339,33 @@ func TestExtractErrorMessageRuneTruncation(t *testing.T) {
 	shortMsg := `{"error":{"message":"API Key is invalid"}}`
 	if got := extractErrorMessage(shortMsg); got != "API Key is invalid" {
 		t.Fatalf("expected untruncated message, got %q", got)
+	}
+}
+
+func TestIsImageModel(t *testing.T) {
+	tests := []struct {
+		model string
+		want  bool
+	}{
+		{"gpt-image-1", true},
+		{"gemini-3.1-flash-image", true},
+		{"dall-e-3", true},
+		{"flux-pro", true},
+		{"imagen-3", true},
+		{"stable-diffusion-xl", true},
+		{"midjourney-v6", true},
+		{"sd-1.5", true},
+		{"stabilityai/sdxl-turbo", true},
+		{"sd3.5-large", true},
+		{"org/sd", true},
+		{"gpt-4o-sdpa", false},
+		{"usd-chat", false},
+		{"csdn-llm", false},
+		{"claude-3-5-sonnet", false},
+	}
+	for _, tt := range tests {
+		if got := IsImageModel(tt.model); got != tt.want {
+			t.Errorf("IsImageModel(%q) = %v, want %v", tt.model, got, tt.want)
+		}
 	}
 }

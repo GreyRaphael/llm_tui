@@ -1,9 +1,12 @@
 package views
 
 import (
+	"cmp"
 	"context"
+	"encoding/json"
 	"fmt"
 	"strings"
+	"sync"
 	"time"
 
 	"llm_tui/internal/api"
@@ -109,6 +112,7 @@ type TesterModel struct {
 	StreamError            string
 	LastRawViewportContent string
 	LastStreamRender       time.Time
+	imageSizeLabel         string
 }
 
 type executeFinishedMsg struct {
@@ -131,6 +135,12 @@ type streamChunkMsg struct {
 	msg api.StreamChunkMsg
 }
 
+var (
+	markdownMu       sync.Mutex
+	markdownWidth    int
+	markdownRenderer *glamour.TermRenderer
+)
+
 func renderMarkdown(text string, width int) string {
 	if text == "" {
 		return ""
@@ -138,14 +148,20 @@ func renderMarkdown(text string, width int) string {
 	if width <= 0 {
 		width = 80
 	}
-	r, err := glamour.NewTermRenderer(
-		glamour.WithStandardStyle("dark"),
-		glamour.WithWordWrap(width),
-	)
-	if err != nil {
-		return text
+	markdownMu.Lock()
+	defer markdownMu.Unlock()
+	if markdownRenderer == nil || markdownWidth != width {
+		r, err := glamour.NewTermRenderer(
+			glamour.WithStandardStyle("dark"),
+			glamour.WithWordWrap(width),
+		)
+		if err != nil {
+			return text
+		}
+		markdownRenderer = r
+		markdownWidth = width
 	}
-	rendered, err := r.Render(text)
+	rendered, err := markdownRenderer.Render(text)
 	if err != nil {
 		return text
 	}
@@ -179,10 +195,7 @@ func NewTesterModel(database *db.DB, record db.ProviderRecord) TesterModel {
 	s := spinner.New()
 	s.Spinner = spinner.Dot
 
-	reasoning := record.ReasoningEffort
-	if reasoning == "" {
-		reasoning = db.ReasoningEffortNone
-	}
+	reasoning := cmp.Or(record.ReasoningEffort, api.ReasoningEffortNone)
 
 	initialPayload := record.CustomPayload
 	if initialPayload == "" {
@@ -190,7 +203,7 @@ func NewTesterModel(database *db.DB, record db.ProviderRecord) TesterModel {
 	}
 	ta.SetValue(initialPayload)
 
-	return TesterModel{
+	m := TesterModel{
 		DB:              database,
 		Record:          record,
 		ReasoningEffort: reasoning,
@@ -199,6 +212,47 @@ func NewTesterModel(database *db.DB, record db.ProviderRecord) TesterModel {
 		Spinner:         s,
 		ActivePane:      PaneRequest,
 	}
+	m.refreshImageSizeLabel()
+	return m
+}
+
+func (m *TesterModel) refreshImageSizeLabel() {
+	if m.Record.APIType != api.APITypeOpenAIImages {
+		m.imageSizeLabel = ""
+		return
+	}
+	current := "512x512 (1:1 0.5K)"
+	var payload map[string]any
+	if err := json.Unmarshal([]byte(m.Textarea.Value()), &payload); err == nil {
+		if size, ok := payload["size"].(string); ok && size != "" {
+			current = size
+			for _, option := range SupportedImageSizes {
+				if strings.EqualFold(option.Size, size) {
+					current = fmt.Sprintf("%s (%s %s)", option.Size, option.Ratio, option.Tier)
+					break
+				}
+			}
+		} else if ratio, ok := payload["aspect_ratio"].(string); ok && ratio != "" {
+			current = fmt.Sprintf("Ratio: %s", ratio)
+		}
+	}
+	m.imageSizeLabel = current
+}
+
+func (m TesterModel) responseViewportHeight(paneHeight int) int {
+	overhead := 5
+	if m.CopyStatusMsg != "" {
+		overhead++
+	}
+	if (m.IsExecuting && m.IsStreamMode && m.StreamError != "") || (!m.IsExecuting && m.LastResult != nil && m.LastResult.Error != "") {
+		overhead++
+	}
+	return max(4, paneHeight-overhead)
+}
+
+func (m *TesterModel) syncViewportHeight() {
+	_, paneHeight := m.paneDimensions()
+	m.Viewport.Height = m.responseViewportHeight(paneHeight)
 }
 
 func (m *TesterModel) setViewportContent(content string) {
@@ -225,7 +279,7 @@ func (m *TesterModel) Resize(w, h int) {
 	m.Textarea.SetHeight(paneHeight - 2)
 
 	m.Viewport.Width = halfWidth - 4
-	m.Viewport.Height = paneHeight - 5
+	m.Viewport.Height = m.responseViewportHeight(paneHeight)
 
 	if m.LastRawViewportContent != "" {
 		m.setViewportContent(m.LastRawViewportContent)
@@ -237,7 +291,7 @@ func (m *TesterModel) Init() tea.Cmd {
 	return tea.Batch(textarea.Blink, m.runFetchModelsCmd(ctx, id))
 }
 
-func (m TesterModel) Update(msg tea.Msg) (TesterModel, tea.Cmd, string) {
+func (m TesterModel) Update(msg tea.Msg) (TesterModel, tea.Cmd, Action) {
 	switch msg := msg.(type) {
 	case testerModelsFetchedMsg:
 		return m.handleModelsFetched(msg)
@@ -245,7 +299,7 @@ func (m TesterModel) Update(msg tea.Msg) (TesterModel, tea.Cmd, string) {
 		return m.handleExecuteFinished(msg)
 	case streamChunkMsg:
 		if msg.id == 0 || msg.id != m.requestID {
-			return m, nil, ""
+			return m, nil, ActionNone
 		}
 		return m.handleStreamChunk(msg.msg)
 	case tea.KeyMsg:

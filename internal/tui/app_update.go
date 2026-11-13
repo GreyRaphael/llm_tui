@@ -51,14 +51,14 @@ func (m AppModel) updateManagerScreen(msg tea.Msg) (tea.Model, tea.Cmd) {
 	updated, cmd, action := m.ManagerView.Update(msg)
 	m.ManagerView = updated
 	switch action {
-	case "probe_new":
+	case views.ActionProbeNew:
 		m.ProbeView = views.NewProbeModel(m.DB)
 		if m.Width > 0 && m.Height > 0 {
 			m.ProbeView.Resize(m.Width, m.Height)
 		}
 		m.Screen = ScreenProbe
-		return m, m.ProbeView.Init()
-	case "open_tester":
+		return m, tea.Batch(cmd, m.ProbeView.Init())
+	case views.ActionOpenTester:
 		record := m.ManagerView.SelectedRecord()
 		if record == nil {
 			return m, cmd
@@ -68,8 +68,7 @@ func (m AppModel) updateManagerScreen(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.TesterView.Resize(m.Width, m.Height)
 		}
 		m.Screen = ScreenTester
-		cmd = m.TesterView.Init()
-		return m, cmd
+		return m, tea.Batch(cmd, m.TesterView.Init())
 	default:
 		return m, cmd
 	}
@@ -79,10 +78,10 @@ func (m AppModel) updateProbeScreen(msg tea.Msg) (tea.Model, tea.Cmd) {
 	updated, cmd, action := m.ProbeView.Update(msg)
 	m.ProbeView = updated
 	switch action {
-	case "back_to_manager":
-		return m.showManager(""), nil
-	case "record_created":
-		return m.showManager("Provider record created and saved to SQLite!"), nil
+	case views.ActionBackToManager:
+		return m.showManager(""), cmd
+	case views.ActionRecordCreated:
+		return m.showManager("Provider record created and saved to SQLite!"), cmd
 	default:
 		return m, cmd
 	}
@@ -91,8 +90,8 @@ func (m AppModel) updateProbeScreen(msg tea.Msg) (tea.Model, tea.Cmd) {
 func (m AppModel) updateTesterScreen(msg tea.Msg) (tea.Model, tea.Cmd) {
 	updated, cmd, action := m.TesterView.Update(msg)
 	m.TesterView = updated
-	if action == "back_to_manager" {
-		return m.showManager(""), nil
+	if action == views.ActionBackToManager {
+		return m.showManager(""), cmd
 	}
 	return m, cmd
 }
@@ -101,8 +100,7 @@ func (m AppModel) showManager(status string) AppModel {
 	m.Screen = ScreenManager
 	m.ManagerView.RefreshRecords()
 	if status != "" {
-		m.ManagerView.StatusMsg = status
-		m.ManagerView.IsError = false
+		m.ManagerView.SetStatus(status, false)
 	}
 	if m.Width > 0 && m.Height > 0 {
 		m.ManagerView.Resize(m.Width, m.Height)

@@ -1,6 +1,7 @@
 package views
 
 import (
+	"cmp"
 	"fmt"
 	"strings"
 
@@ -29,9 +30,7 @@ type ManagerModel struct {
 }
 
 func NewManagerModel(database *db.DB, version string) ManagerModel {
-	if version == "" {
-		version = "v1.0.0"
-	}
+	version = cmp.Or(version, "v1.0.0")
 	vp := viewport.New(76, 14)
 	m := ManagerModel{
 		DB:       database,
@@ -44,14 +43,26 @@ func NewManagerModel(database *db.DB, version string) ManagerModel {
 	return m
 }
 
-func (m *ManagerModel) recalculateDimensions() {
-	cardWidth := m.Width - 6
-	if cardWidth < 30 {
-		cardWidth = m.Width - 2
-		if cardWidth < 20 {
-			cardWidth = 20
+// SetStatus sets the banner message and recalculates viewport dimensions.
+func (m *ManagerModel) SetStatus(message string, isError bool) {
+	m.StatusMsg = message
+	m.IsError = isError
+	m.recalculateDimensions()
+}
+
+func (m ManagerModel) cardWidth() int {
+	w := m.Width - 6
+	if w < 30 {
+		w = m.Width - 2
+		if w < 20 {
+			w = 20
 		}
 	}
+	return w
+}
+
+func (m *ManagerModel) recalculateDimensions() {
+	cardWidth := m.cardWidth()
 
 	headerHeight := 3
 	if m.StatusMsg != "" {
@@ -99,13 +110,7 @@ func (m *ManagerModel) RefreshRecords() {
 }
 
 func (m *ManagerModel) updateViewportContent() {
-	cardWidth := m.Width - 6
-	if cardWidth < 30 {
-		cardWidth = m.Width - 2
-		if cardWidth < 20 {
-			cardWidth = 20
-		}
-	}
+	cardWidth := m.cardWidth()
 
 	normalCardStyle := lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
@@ -208,64 +213,57 @@ func (m *ManagerModel) ensureCursorVisible() {
 	}
 }
 
-func (m ManagerModel) Update(msg tea.Msg) (ManagerModel, tea.Cmd, string) {
-	var action string // e.g. "probe_new", "open_tester"
-	var cmd tea.Cmd
-
+func (m ManagerModel) Update(msg tea.Msg) (ManagerModel, tea.Cmd, Action) {
 	switch msg := msg.(type) {
 	case tea.KeyMsg:
 		// Cancel delete confirmation on any key except 'd'
 		if m.ConfirmDelete && msg.String() != "d" {
 			m.ConfirmDelete = false
-			m.StatusMsg = ""
-			m.IsError = false
-			m.recalculateDimensions()
+			m.SetStatus("", false)
 			m.ensureCursorVisible()
 		}
 
 		switch msg.String() {
 		case "k", "up":
 			if m.StatusMsg != "" && !m.ConfirmDelete {
-				m.StatusMsg = ""
-				m.IsError = false
-				m.recalculateDimensions()
+				m.SetStatus("", false)
 			}
 			if m.Cursor > 0 {
 				m.Cursor--
 				m.updateViewportContent()
 				m.ensureCursorVisible()
 			}
+			return m, nil, ActionNone
 		case "j", "down":
 			if m.StatusMsg != "" && !m.ConfirmDelete {
-				m.StatusMsg = ""
-				m.IsError = false
-				m.recalculateDimensions()
+				m.SetStatus("", false)
 			}
 			if m.Cursor < len(m.Records)-1 {
 				m.Cursor++
 				m.updateViewportContent()
 				m.ensureCursorVisible()
 			}
+			return m, nil, ActionNone
 		case "pgup", "ctrl+b":
 			m.Viewport.HalfPageUp()
+			return m, nil, ActionNone
 		case "pgdown", "ctrl+f":
 			m.Viewport.HalfPageDown()
+			return m, nil, ActionNone
 		case "n":
-			action = "probe_new"
+			return m, nil, ActionProbeNew
 		case "enter", "t":
 			if len(m.Records) > 0 && m.Cursor < len(m.Records) {
-				action = "open_tester"
+				return m, nil, ActionOpenTester
 			}
+			return m, nil, ActionNone
 		case "d":
 			if len(m.Records) > 0 && m.Cursor < len(m.Records) {
 				if m.ConfirmDelete {
 					// Second press: actually delete
 					target := m.Records[m.Cursor]
-					err := m.DB.DeleteRecord(target.ID)
-					if err != nil {
-						m.StatusMsg = fmt.Sprintf("Failed to delete record: %v", err)
-						m.IsError = true
-						m.recalculateDimensions()
+					if err := m.DB.DeleteRecord(target.ID); err != nil {
+						m.SetStatus(fmt.Sprintf("Failed to delete record: %v", err), true)
 					} else {
 						m.StatusMsg = fmt.Sprintf("Deleted record '%s'", target.Name)
 						m.IsError = false
@@ -275,17 +273,17 @@ func (m ManagerModel) Update(msg tea.Msg) (ManagerModel, tea.Cmd, string) {
 				} else {
 					// First press: ask for confirmation
 					m.ConfirmDelete = true
-					m.StatusMsg = fmt.Sprintf("⚠️  Press 'd' again to confirm deleting '%s'", m.Records[m.Cursor].Name)
-					m.IsError = true
-					m.recalculateDimensions()
+					m.SetStatus(fmt.Sprintf("⚠️  Press 'd' again to confirm deleting '%s'", m.Records[m.Cursor].Name), true)
 					m.ensureCursorVisible()
 				}
 			}
+			return m, nil, ActionNone
 		}
 	}
 
+	var cmd tea.Cmd
 	m.Viewport, cmd = m.Viewport.Update(msg)
-	return m, cmd, action
+	return m, cmd, ActionNone
 }
 
 func (m ManagerModel) SelectedRecord() *db.ProviderRecord {
@@ -300,14 +298,7 @@ func (m ManagerModel) View() string {
 
 	header := styles.HeaderStyle.Render(fmt.Sprintf("⚡ LLM & Image AI Manager %s (Chat · Responses · Anthropic · Images)", m.Version))
 	sb.WriteString(header + "\n\n")
-
-	if m.StatusMsg != "" {
-		if m.IsError {
-			sb.WriteString(styles.ErrorStyle.Render("❌ "+m.StatusMsg) + "\n\n")
-		} else {
-			sb.WriteString(styles.SubtitleStyle.Render("ℹ️  "+m.StatusMsg) + "\n\n")
-		}
-	}
+	sb.WriteString(renderStatusBanner(m.StatusMsg, m.IsError))
 
 	sb.WriteString(m.Viewport.View() + "\n")
 

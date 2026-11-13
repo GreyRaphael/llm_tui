@@ -1,12 +1,11 @@
 package views
 
 import (
-	"encoding/json"
+	"cmp"
 	"fmt"
 	"strings"
 
 	"llm_tui/internal/api"
-	"llm_tui/internal/db"
 	"llm_tui/internal/tui/styles"
 
 	"github.com/charmbracelet/lipgloss"
@@ -41,7 +40,7 @@ func (m TesterModel) renderHeader() string {
 	)
 	sb.WriteString(styles.CardStyle.Render(info) + "\n")
 	if m.Record.APIType == api.APITypeOpenAIImages {
-		sb.WriteString(styles.HelpStyle.Render("📁 Output directory: ./generated_images/ | Press [Ctrl+O] to open last generated image in system viewer") + "\n")
+		sb.WriteString(styles.HelpStyle.Render("📁 Output directory: ./generated_images/ | Press [Ctrl+O] to open last generated image in system viewer"))
 	} else {
 		sb.WriteString(m.reasoningEffortBadges())
 	}
@@ -53,36 +52,14 @@ func (m TesterModel) imageSizeBadge() string {
 	if m.Record.APIType != api.APITypeOpenAIImages {
 		return ""
 	}
-	current := "512x512 (1:1 0.5K)"
-	var payload map[string]interface{}
-	if err := json.Unmarshal([]byte(m.Textarea.Value()), &payload); err == nil {
-		if size, ok := payload["size"].(string); ok && size != "" {
-			current = size
-			for _, option := range SupportedImageSizes {
-				if strings.EqualFold(option.Size, size) {
-					current = fmt.Sprintf("%s (%s %s)", option.Size, option.Ratio, option.Tier)
-					break
-				}
-			}
-		} else if ratio, ok := payload["aspect_ratio"].(string); ok && ratio != "" {
-			current = fmt.Sprintf("Ratio: %s", ratio)
-		}
-	}
+	current := cmp.Or(m.imageSizeLabel, "512x512 (1:1 0.5K)")
 	return fmt.Sprintf(" | Size: %s [Press Alt+A to change]", styles.MetricValueStyle.Render(current))
 }
 
 func (m TesterModel) reasoningEffortBadges() string {
-	efforts := []string{
-		db.ReasoningEffortNone,
-		db.ReasoningEffortLow,
-		db.ReasoningEffortMedium,
-		db.ReasoningEffortHigh,
-		db.ReasoningEffortXHigh,
-		db.ReasoningEffortMax,
-	}
 	var sb strings.Builder
 	sb.WriteString(styles.MetricLabelStyle.Render("Reasoning Effort Shortcuts: ") + " ")
-	for i, effort := range efforts {
+	for i, effort := range api.SupportedReasoningEfforts {
 		style := styles.BadgeStyle
 		if effort == m.ReasoningEffort {
 			style = styles.BadgeAccentStyle
@@ -141,22 +118,9 @@ func (m TesterModel) renderSizePicker(height int) string {
 func (m TesterModel) renderModelPicker(height int) string {
 	total := len(m.DiscoveredModels)
 	title := fmt.Sprintf("🤖 Select Model (Model list length: %d, [%d/%d] - ↑/↓ to move, Enter to apply, Esc to cancel)", total, m.ModelIndex+1, total)
-	start, end := visibleWindow(m.ModelIndex, total, max(20, height-4))
 	var sb strings.Builder
 	sb.WriteString(styles.SubtitleStyle.Render(title) + "\n\n")
-	if start > 0 {
-		sb.WriteString(fmt.Sprintf("  ▲ %d models above...\n", start))
-	}
-	for i := start; i < end; i++ {
-		prefix := "  "
-		if i == m.ModelIndex {
-			prefix = "👉"
-		}
-		sb.WriteString(fmt.Sprintf("%s %s\n", prefix, styles.MetricValueStyle.Render(m.DiscoveredModels[i])))
-	}
-	if end < total {
-		sb.WriteString(fmt.Sprintf("  ▼ %d models below...\n", total-end))
-	}
+	renderModelWindow(&sb, m.DiscoveredModels, m.ModelIndex, max(20, height-4))
 	return sb.String()
 }
 
@@ -193,16 +157,28 @@ func (m TesterModel) renderRightPane(width, height int) string {
 	return renderTesterPane(width, height, color, content.String())
 }
 
+func formatTokens(prompt, completion, total int) string {
+	if total == 0 && prompt == 0 && completion == 0 {
+		return "-"
+	}
+	displayTotal := max(total, prompt+completion)
+	if prompt > 0 || completion > 0 {
+		return fmt.Sprintf("%d(%d+%d)", displayTotal, prompt, completion)
+	}
+	return fmt.Sprintf("%d", displayTotal)
+}
+
 func (m TesterModel) renderExecutingStream() string {
 	status := "HTTP ..."
 	if m.StreamStatusCode > 0 {
 		status = fmt.Sprintf("HTTP %d", m.StreamStatusCode)
 	}
 	metrics := fmt.Sprintf(
-		"%s %s | Latency: %s",
+		"%s %s | %s | Tokens: %s",
 		m.Spinner.View(),
 		styles.BadgeSuccessStyle.Render(status),
 		styles.MetricValueStyle.Render(formatLatency(m.StreamLatency)),
+		formatTokens(m.StreamPromptTokens, m.StreamCompletionTokens, m.StreamTotalTokens),
 	)
 	var sb strings.Builder
 	sb.WriteString(metrics + "\n\n")
@@ -223,9 +199,10 @@ func (m TesterModel) renderCompletedResult() string {
 		status = fmt.Sprintf("HTTP %d (API Error)", result.StatusCode)
 	}
 	metrics := fmt.Sprintf(
-		"%s | Latency: %s | tps: %s",
+		"%s | %s | Tokens: %s | tps: %s",
 		statusStyle.Render(status),
 		styles.MetricValueStyle.Render(formatLatency(result.Latency)),
+		formatTokens(result.PromptTokens, result.CompletionTokens, result.TotalTokens),
 		formatTPS(result.TotalTokens, result.Latency),
 	)
 	var sb strings.Builder

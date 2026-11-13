@@ -1,6 +1,7 @@
 package db
 
 import (
+	"cmp"
 	"database/sql"
 	"fmt"
 	"os"
@@ -32,19 +33,34 @@ func isDirWritable(dir string) bool {
 
 // getUserConfigDBPath returns ~/.config/llm_tui/providers.db (or OS equivalent user config directory).
 func getUserConfigDBPath() string {
+	var candidates []string
 	if configDir, err := os.UserConfigDir(); err == nil && configDir != "" {
-		appDir := filepath.Join(configDir, "llm_tui")
-		if err := os.MkdirAll(appDir, 0755); err == nil && isDirWritable(appDir) {
-			return filepath.Join(appDir, "providers.db")
-		}
+		candidates = append(candidates, configDir)
 	}
 	if homeDir, err := os.UserHomeDir(); err == nil && homeDir != "" {
-		appDir := filepath.Join(homeDir, ".config", "llm_tui")
+		candidates = append(candidates, filepath.Join(homeDir, ".config"))
+	}
+	for _, base := range candidates {
+		appDir := filepath.Join(base, "llm_tui")
 		if err := os.MkdirAll(appDir, 0755); err == nil && isDirWritable(appDir) {
 			return filepath.Join(appDir, "providers.db")
 		}
 	}
 	return ""
+}
+
+func isUnderDir(path, dir string) bool {
+	if dir == "" {
+		return false
+	}
+	if resolved, err := filepath.EvalSymlinks(dir); err == nil {
+		dir = resolved
+	}
+	rel, err := filepath.Rel(filepath.Clean(dir), filepath.Clean(path))
+	if err != nil {
+		return false
+	}
+	return rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
 }
 
 // GetDefaultDBPath calculates the sqlite database file path.
@@ -62,8 +78,7 @@ func GetDefaultDBPath() string {
 		// Heuristic: detect temporary directories used by `go run`.
 		// On Linux/macOS, `go run` compiles to a path containing "go-build".
 		// On Windows, the compiled binary lives under os.TempDir().
-		tempDir := os.TempDir()
-		if !strings.Contains(exePath, "go-build") && !strings.HasPrefix(exePath, tempDir) {
+		if !strings.Contains(exePath, "go-build") && !isUnderDir(exePath, os.TempDir()) {
 			dir := filepath.Dir(exePath)
 			if isDirWritable(dir) {
 				return filepath.Join(dir, "providers.db")
@@ -95,9 +110,7 @@ func GetDefaultDBPath() string {
 // InitDB initializes SQLite database at the given path (or default path if empty).
 // Supports ":memory:" for in-memory unit testing.
 func InitDB(dbPath string) (*DB, error) {
-	if dbPath == "" {
-		dbPath = GetDefaultDBPath()
-	}
+	dbPath = cmp.Or(dbPath, GetDefaultDBPath())
 
 	if dbPath != ":memory:" {
 		dir := filepath.Dir(dbPath)
@@ -110,12 +123,14 @@ func InitDB(dbPath string) (*DB, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to open sqlite db at %s: %w", dbPath, err)
 	}
+	conn.SetMaxOpenConns(1)
 
 	// Test connection
 	if err := conn.Ping(); err != nil {
 		_ = conn.Close()
 		return nil, fmt.Errorf("failed to ping sqlite db: %w", err)
 	}
+	_, _ = conn.Exec("PRAGMA busy_timeout = 5000")
 
 	database := &DB{DB: conn}
 	if err := database.migrate(); err != nil {

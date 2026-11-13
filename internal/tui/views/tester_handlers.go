@@ -9,7 +9,6 @@ import (
 
 	"llm_tui/internal/api"
 	"llm_tui/internal/clipboard"
-	"llm_tui/internal/db"
 
 	"github.com/charmbracelet/bubbles/textarea"
 	tea "github.com/charmbracelet/bubbletea"
@@ -20,15 +19,16 @@ import (
 func (m *TesterModel) setStatus(message string, isError bool) {
 	m.CopyStatusMsg = message
 	m.StatusIsError = isError
+	m.syncViewportHeight()
 }
 
-func (m TesterModel) handleModelsFetched(msg testerModelsFetchedMsg) (TesterModel, tea.Cmd, string) {
+func (m TesterModel) handleModelsFetched(msg testerModelsFetchedMsg) (TesterModel, tea.Cmd, Action) {
 	if !finishTrackedRequest(&m.cancelModels, &m.modelsRequestID, msg.id) {
-		return m, nil, ""
+		return m, nil, ActionNone
 	}
 	if msg.err != nil {
 		m.setStatus(fmt.Sprintf("Failed to discover models: %v", msg.err), true)
-		return m, nil, ""
+		return m, nil, ActionNone
 	}
 	m.DiscoveredModels = msg.models
 	for i, model := range m.DiscoveredModels {
@@ -40,27 +40,27 @@ func (m TesterModel) handleModelsFetched(msg testerModelsFetchedMsg) (TesterMode
 	if len(m.DiscoveredModels) > 0 && m.CopyStatusMsg == "" {
 		m.setStatus(fmt.Sprintf("Discovered %d models via /models (Model list length: %d)", len(m.DiscoveredModels), len(m.DiscoveredModels)), false)
 	}
-	return m, nil, ""
+	return m, nil, ActionNone
 }
 
-func (m TesterModel) handleExecuteFinished(msg executeFinishedMsg) (TesterModel, tea.Cmd, string) {
+func (m TesterModel) handleExecuteFinished(msg executeFinishedMsg) (TesterModel, tea.Cmd, Action) {
 	if !finishTrackedRequest(&m.cancelExecution, &m.requestID, msg.id) {
-		return m, nil, ""
+		return m, nil, ActionNone
 	}
 	m.IsExecuting = false
 	m.LastResult = msg.result
-	m.setViewportContent(msg.result.FormattedBody)
-	m.Viewport.GotoTop()
 	if len(msg.result.SavedImages) > 0 {
 		m.LatestSavedImage = msg.result.SavedImages[0]
 		m.setStatus(fmt.Sprintf("🖼️ Saved %d image(s) to ./generated_images! [Ctrl+O] to open.", len(msg.result.SavedImages)), false)
 	} else {
 		m.setStatus("", false)
 	}
-	return m, nil, ""
+	m.setViewportContent(msg.result.FormattedBody)
+	m.Viewport.GotoTop()
+	return m, nil, ActionNone
 }
 
-func (m TesterModel) handleSizeKey(msg tea.KeyMsg) (TesterModel, tea.Cmd, string) {
+func (m TesterModel) handleSizeKey(msg tea.KeyMsg) (TesterModel, tea.Cmd, Action) {
 	switch msg.String() {
 	case "esc":
 		m.SelectingAspectRatio = false
@@ -75,41 +75,38 @@ func (m TesterModel) handleSizeKey(msg tea.KeyMsg) (TesterModel, tea.Cmd, string
 	case "enter":
 		return m.applyImageSize()
 	}
-	return m, nil, ""
+	return m, nil, ActionNone
 }
 
-func (m TesterModel) applyImageSize() (TesterModel, tea.Cmd, string) {
+func (m TesterModel) applyImageSize() (TesterModel, tea.Cmd, Action) {
 	if m.AspectRatioIndex < 0 || m.AspectRatioIndex >= len(SupportedImageSizes) {
 		m.SelectingAspectRatio = false
-		return m, nil, ""
+		return m, nil, ActionNone
 	}
 	preset := SupportedImageSizes[m.AspectRatioIndex]
-	var payload map[string]interface{}
-	if err := json.Unmarshal([]byte(m.Textarea.Value()), &payload); err != nil {
-		m.setStatus(fmt.Sprintf("❌ Cannot change image size: invalid JSON payload: %v", err), true)
-		return m, nil, ""
-	}
-	payload["size"] = preset.Size
-	for _, key := range []string{"aspect_ratio", "aspectRatio", "image_size", "imageSize", "_imageSize"} {
-		delete(payload, key)
-	}
-	buf, err := json.MarshalIndent(payload, "", "  ")
+	updated, err := api.PatchPayloadJSON(m.Textarea.Value(), func(payload map[string]any) {
+		payload["size"] = preset.Size
+		for _, key := range []string{"aspect_ratio", "aspectRatio", "image_size", "imageSize", "_imageSize"} {
+			delete(payload, key)
+		}
+	})
 	if err != nil {
-		m.setStatus(fmt.Sprintf("❌ Cannot change image size: %v", err), true)
-		return m, nil, ""
+		m.setStatus(fmt.Sprintf("❌ Cannot change image size: invalid JSON payload: %v", err), true)
+		return m, nil, ActionNone
 	}
-	m.Textarea.SetValue(string(buf))
+	m.Textarea.SetValue(updated)
+	m.refreshImageSizeLabel()
 	m.SelectingAspectRatio = false
-	m.Record.CustomPayload = m.Textarea.Value()
+	m.Record.CustomPayload = updated
 	if err := m.DB.UpdateRecord(&m.Record); err != nil {
 		m.setStatus(fmt.Sprintf("⚠️ Failed to save image size to DB: %v", err), true)
 	} else {
 		m.setStatus(fmt.Sprintf("📐 Changed size to '%s' (%s %s)", preset.Size, preset.Ratio, preset.Tier), false)
 	}
-	return m, nil, ""
+	return m, nil, ActionNone
 }
 
-func (m TesterModel) handleModelKey(msg tea.KeyMsg) (TesterModel, tea.Cmd, string) {
+func (m TesterModel) handleModelKey(msg tea.KeyMsg) (TesterModel, tea.Cmd, Action) {
 	switch msg.String() {
 	case "esc":
 		m.SelectingModel = false
@@ -132,10 +129,24 @@ func (m TesterModel) handleModelKey(msg tea.KeyMsg) (TesterModel, tea.Cmd, strin
 				m.Record.Name = newModel
 			}
 			m.Record.Model = newModel
-			m.regeneratePayloadPreservingStream()
+
+			var payloadErr error
+			if strings.TrimSpace(m.Textarea.Value()) == "" {
+				m.Textarea.SetValue(api.GeneratePayloadTemplate(m.Record.APIType, m.Record.Model, m.ReasoningEffort))
+			} else if updated, err := api.PatchPayloadJSON(m.Textarea.Value(), func(payload map[string]any) {
+				payload["model"] = newModel
+			}); err != nil {
+				payloadErr = err
+			} else {
+				m.Textarea.SetValue(updated)
+			}
+			m.refreshImageSizeLabel()
 			m.Record.CustomPayload = m.Textarea.Value()
+
 			if err := m.DB.UpdateRecord(&m.Record); err != nil {
 				m.setStatus(fmt.Sprintf("⚠️ Failed to save model switch to DB: %v", err), true)
+			} else if payloadErr != nil {
+				m.setStatus(fmt.Sprintf("⚠️ Switched model to '%s', but payload is invalid JSON: %v", newModel, payloadErr), true)
 			} else if m.Record.Name != oldName {
 				m.setStatus(fmt.Sprintf("Switched model to '%s' (alias renamed to '%s'; Model list length: %d)", newModel, m.Record.Name, len(m.DiscoveredModels)), false)
 			} else {
@@ -144,47 +155,39 @@ func (m TesterModel) handleModelKey(msg tea.KeyMsg) (TesterModel, tea.Cmd, strin
 		}
 		m.SelectingModel = false
 	}
-	return m, nil, ""
+	return m, nil, ActionNone
 }
 
-func (m *TesterModel) regeneratePayloadPreservingStream() {
-	currentStream := true
-	var oldPayload map[string]interface{}
-	if err := json.Unmarshal([]byte(m.Textarea.Value()), &oldPayload); err == nil {
-		if stream, ok := oldPayload["stream"].(bool); ok {
-			currentStream = stream
-		}
+func (m *TesterModel) rejectWhileExecuting() bool {
+	if !m.IsExecuting {
+		return false
 	}
-	newTemplate := api.GeneratePayloadTemplate(m.Record.APIType, m.Record.Model, m.ReasoningEffort)
-	var newPayload map[string]interface{}
-	if err := json.Unmarshal([]byte(newTemplate), &newPayload); err == nil {
-		if m.Record.APIType != api.APITypeOpenAIImages {
-			newPayload["stream"] = currentStream
-		}
-		if buf, err := json.MarshalIndent(newPayload, "", "  "); err == nil {
-			m.Textarea.SetValue(string(buf))
-			return
-		}
-	}
-	m.Textarea.SetValue(newTemplate)
+	m.setStatus("⏳ A request is already running — wait for completion before changing settings.", false)
+	return true
 }
 
-func (m TesterModel) handleMainKey(msg tea.KeyMsg) (TesterModel, tea.Cmd, string) {
+func (m TesterModel) handleMainKey(msg tea.KeyMsg) (TesterModel, tea.Cmd, Action) {
 	switch msg.String() {
 	case "esc":
 		m.CancelRequests()
-		return m, nil, "back_to_manager"
+		return m, nil, ActionBackToManager
 	case "alt+a":
+		if m.rejectWhileExecuting() {
+			return m, nil, ActionNone
+		}
 		return m.openSizePicker()
 	case "ctrl+o":
 		return m.openLatestImage()
 	case "alt+m":
+		if m.rejectWhileExecuting() {
+			return m, nil, ActionNone
+		}
 		if len(m.DiscoveredModels) > 0 {
 			m.SelectingModel = true
 		} else {
 			m.setStatus("No models list available via /models for this provider (Model list length: 0)", false)
 		}
-		return m, nil, ""
+		return m, nil, ActionNone
 	case "tab", "shift+tab":
 		if m.ActivePane == PaneRequest {
 			m.ActivePane = PaneResponse
@@ -193,32 +196,42 @@ func (m TesterModel) handleMainKey(msg tea.KeyMsg) (TesterModel, tea.Cmd, string
 			m.ActivePane = PaneRequest
 			m.Textarea.Focus()
 		}
-		return m, textarea.Blink, ""
+		return m, textarea.Blink, ActionNone
 	case "ctrl+y":
 		if payload := m.Textarea.Value(); payload != "" {
 			m.copyToClipboard(payload, "📋 Request Payload JSON copied to clipboard!")
-			return m, nil, ""
+		} else {
+			m.setStatus("Nothing to copy: request payload is empty", false)
 		}
+		return m, nil, ActionNone
 	case "ctrl+u":
 		if m.LastResult != nil && m.LastResult.FormattedBody != "" {
 			m.copyToClipboard(m.LastResult.FormattedBody, "📋 Response JSON copied to clipboard!")
-			return m, nil, ""
+		} else {
+			m.setStatus("Nothing to copy: no response yet", false)
 		}
+		return m, nil, ActionNone
 	case "pgdown", "pagedown", "ctrl+f":
 		if m.ActivePane == PaneResponse {
 			m.Viewport.HalfPageDown()
-			return m, nil, ""
+			return m, nil, ActionNone
 		}
 	case "pgup", "pageup", "ctrl+b":
 		if m.ActivePane == PaneResponse {
 			m.Viewport.HalfPageUp()
-			return m, nil, ""
+			return m, nil, ActionNone
 		}
 	case "ctrl+s", "ctrl+r":
 		return m.startExecution()
 	case "alt+s":
+		if m.rejectWhileExecuting() {
+			return m, nil, ActionNone
+		}
 		return m.toggleStreamMode()
 	case "alt+1", "alt+2", "alt+3", "alt+4", "alt+5", "alt+6":
+		if m.rejectWhileExecuting() {
+			return m, nil, ActionNone
+		}
 		return m.setReasoningShortcut(msg.String())
 	}
 	return m.updateActiveComponent(msg)
@@ -232,13 +245,13 @@ func (m *TesterModel) copyToClipboard(text, successMessage string) {
 	m.setStatus(successMessage, false)
 }
 
-func (m TesterModel) openSizePicker() (TesterModel, tea.Cmd, string) {
+func (m TesterModel) openSizePicker() (TesterModel, tea.Cmd, Action) {
 	if m.Record.APIType != api.APITypeOpenAIImages {
 		m.setStatus("Image size presets are only applicable to image generation (openai_images)", false)
-		return m, nil, ""
+		return m, nil, ActionNone
 	}
 	m.SelectingAspectRatio = true
-	var payload map[string]interface{}
+	var payload map[string]any
 	if err := json.Unmarshal([]byte(m.Textarea.Value()), &payload); err == nil {
 		currentSize, hasSize := payload["size"].(string)
 		currentRatio, _ := payload["aspect_ratio"].(string)
@@ -249,15 +262,15 @@ func (m TesterModel) openSizePicker() (TesterModel, tea.Cmd, string) {
 			}
 		}
 	}
-	return m, nil, ""
+	return m, nil, ActionNone
 }
 
-func (m TesterModel) openLatestImage() (TesterModel, tea.Cmd, string) {
+func (m TesterModel) openLatestImage() (TesterModel, tea.Cmd, Action) {
 	if m.LatestSavedImage == "" {
 		if m.Record.APIType == api.APITypeOpenAIImages {
 			m.setStatus("No image has been generated yet in this session (Press Ctrl+S to generate)", false)
 		}
-		return m, nil, ""
+		return m, nil, ActionNone
 	}
 	if err := api.OpenImageFile(m.LatestSavedImage); err != nil {
 		if errors.Is(err, api.ErrHeadlessEnvironment) {
@@ -265,19 +278,18 @@ func (m TesterModel) openLatestImage() (TesterModel, tea.Cmd, string) {
 		} else {
 			m.setStatus(fmt.Sprintf("❌ Failed to open image: %v", err), true)
 		}
-		return m, nil, ""
+		return m, nil, ActionNone
 	}
 	m.setStatus(fmt.Sprintf("🖼️ Opened %s in system viewer", m.LatestSavedImage), false)
-	return m, nil, ""
+	return m, nil, ActionNone
 }
 
-func (m TesterModel) startExecution() (TesterModel, tea.Cmd, string) {
+func (m TesterModel) startExecution() (TesterModel, tea.Cmd, Action) {
 	if m.IsExecuting {
 		m.setStatus("⏳ A request is already running — wait for it to finish or press Esc.", false)
-		return m, nil, ""
+		return m, nil, ActionNone
 	}
 	m.IsExecuting = true
-	m.setStatus("", false)
 	m.ReasoningText = ""
 	m.ContentText = ""
 	m.StreamStatusCode = 0
@@ -288,7 +300,9 @@ func (m TesterModel) startExecution() (TesterModel, tea.Cmd, string) {
 	m.StreamError = ""
 	m.LastResult = nil
 	m.LastStreamRender = time.Time{}
+	m.setStatus("", false)
 	m.setViewportContent("")
+	m.Viewport.GotoTop()
 
 	m.Record.CustomPayload = m.Textarea.Value()
 	m.Record.ReasoningEffort = m.ReasoningEffort
@@ -296,7 +310,7 @@ func (m TesterModel) startExecution() (TesterModel, tea.Cmd, string) {
 		m.setStatus(fmt.Sprintf("⚠️ Failed to save record to DB: %v", err), true)
 	}
 
-	var payload map[string]interface{}
+	var payload map[string]any
 	isStream := false
 	if err := json.Unmarshal([]byte(m.Textarea.Value()), &payload); err == nil {
 		isStream, _ = payload["stream"].(bool)
@@ -309,61 +323,93 @@ func (m TesterModel) startExecution() (TesterModel, tea.Cmd, string) {
 	m.IsStreamMode = isStream
 	ctx, id := beginTrackedRequest(&m.cancelExecution, &m.requestID)
 	if !isStream {
-		return m, tea.Batch(m.Spinner.Tick, m.runExecuteNonStreamCmd(ctx, id)), ""
+		return m, tea.Batch(m.Spinner.Tick, m.runExecuteNonStreamCmd(ctx, id)), ActionNone
 	}
 	ch := make(chan api.StreamChunkMsg, 100)
 	m.StreamChan = ch
-	return m, tea.Batch(m.Spinner.Tick, m.runExecuteStreamCmd(ctx, ch), waitForStreamChunkCmd(id, ch)), ""
+	return m, tea.Batch(m.Spinner.Tick, m.runExecuteStreamCmd(ctx, ch), waitForStreamChunkCmd(id, ch)), ActionNone
 }
 
-func (m TesterModel) toggleStreamMode() (TesterModel, tea.Cmd, string) {
+func (m TesterModel) toggleStreamMode() (TesterModel, tea.Cmd, Action) {
 	if m.Record.APIType == api.APITypeOpenAIImages {
 		m.setStatus("Stream mode is not applicable to image generation", false)
-		return m, nil, ""
+		return m, nil, ActionNone
 	}
-	var payload map[string]interface{}
-	if err := json.Unmarshal([]byte(m.Textarea.Value()), &payload); err != nil {
-		m.setStatus("❌ Cannot toggle stream: invalid JSON payload", true)
-		return m, nil, ""
-	}
-	currentStream, _ := payload["stream"].(bool)
-	payload["stream"] = !currentStream
-	buf, err := json.MarshalIndent(payload, "", "  ")
+	var currentStream bool
+	updated, err := api.PatchPayloadJSON(m.Textarea.Value(), func(payload map[string]any) {
+		currentStream, _ = payload["stream"].(bool)
+		payload["stream"] = !currentStream
+	})
 	if err != nil {
-		m.setStatus(fmt.Sprintf("❌ Cannot toggle stream: %v", err), true)
-		return m, nil, ""
+		m.setStatus("❌ Cannot toggle stream: invalid JSON payload", true)
+		return m, nil, ActionNone
 	}
-	m.Textarea.SetValue(string(buf))
+	m.Textarea.SetValue(updated)
 	if currentStream {
 		m.setStatus("🔄 Stream mode: OFF", false)
 	} else {
 		m.setStatus("🔄 Stream mode: ON", false)
 	}
-	return m, nil, ""
+	return m, nil, ActionNone
 }
 
-func (m TesterModel) setReasoningShortcut(key string) (TesterModel, tea.Cmd, string) {
-	efforts := map[string]string{
-		"alt+1": db.ReasoningEffortNone,
-		"alt+2": db.ReasoningEffortLow,
-		"alt+3": db.ReasoningEffortMedium,
-		"alt+4": db.ReasoningEffortHigh,
-		"alt+5": db.ReasoningEffortXHigh,
-		"alt+6": db.ReasoningEffortMax,
+func (m TesterModel) setReasoningShortcut(key string) (TesterModel, tea.Cmd, Action) {
+	if m.Record.APIType == api.APITypeOpenAIImages {
+		m.setStatus("Reasoning effort is not applicable to image generation (openai_images)", false)
+		return m, nil, ActionNone
 	}
-	m.ReasoningEffort = efforts[key]
-	m.regeneratePayloadPreservingStream()
-	return m, nil, ""
-}
-
-func (m TesterModel) updateActiveComponent(msg tea.Msg) (TesterModel, tea.Cmd, string) {
-	var cmd tea.Cmd
-	if m.IsExecuting {
-		m.Spinner, cmd = m.Spinner.Update(msg)
-	} else if m.ActivePane == PaneRequest {
-		m.Textarea, cmd = m.Textarea.Update(msg)
+	idx := int(key[len(key)-1] - '1')
+	if idx < 0 || idx >= len(api.SupportedReasoningEfforts) {
+		return m, nil, ActionNone
+	}
+	effort := api.SupportedReasoningEfforts[idx]
+	var updated string
+	if strings.TrimSpace(m.Textarea.Value()) == "" {
+		updated = api.GeneratePayloadTemplate(m.Record.APIType, m.Record.Model, effort)
 	} else {
-		m.Viewport, cmd = m.Viewport.Update(msg)
+		var err error
+		updated, err = api.PatchPayloadJSON(m.Textarea.Value(), func(payload map[string]any) {
+			api.SetReasoningEffortField(payload, m.Record.APIType, effort)
+		})
+		if err != nil {
+			m.setStatus(fmt.Sprintf("❌ Cannot change reasoning effort: invalid JSON payload: %v", err), true)
+			return m, nil, ActionNone
+		}
 	}
-	return m, cmd, ""
+	m.ReasoningEffort = effort
+	m.Record.ReasoningEffort = effort
+	m.Textarea.SetValue(updated)
+	m.Record.CustomPayload = updated
+	if err := m.DB.UpdateRecord(&m.Record); err != nil {
+		m.setStatus(fmt.Sprintf("⚠️ Reasoning effort set to '%s', failed to save to DB: %v", effort, err), true)
+	} else {
+		m.setStatus(fmt.Sprintf("🧠 Reasoning effort: %s", effort), false)
+	}
+	return m, nil, ActionNone
+}
+
+func (m TesterModel) updateActiveComponent(msg tea.Msg) (TesterModel, tea.Cmd, Action) {
+	var cmds []tea.Cmd
+	if m.IsExecuting {
+		var spinCmd tea.Cmd
+		m.Spinner, spinCmd = m.Spinner.Update(msg)
+		if spinCmd != nil {
+			cmds = append(cmds, spinCmd)
+		}
+	} else if m.ActivePane == PaneRequest {
+		var taCmd tea.Cmd
+		m.Textarea, taCmd = m.Textarea.Update(msg)
+		m.refreshImageSizeLabel()
+		if taCmd != nil {
+			cmds = append(cmds, taCmd)
+		}
+	}
+	if m.ActivePane == PaneResponse {
+		var vpCmd tea.Cmd
+		m.Viewport, vpCmd = m.Viewport.Update(msg)
+		if vpCmd != nil {
+			cmds = append(cmds, vpCmd)
+		}
+	}
+	return m, tea.Batch(cmds...), ActionNone
 }

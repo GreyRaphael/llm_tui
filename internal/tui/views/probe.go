@@ -1,8 +1,10 @@
 package views
 
 import (
+	"cmp"
 	"context"
 	"fmt"
+	"slices"
 	"strings"
 
 	"llm_tui/internal/api"
@@ -245,14 +247,7 @@ func (m ProbeModel) View() string {
 
 	header := styles.HeaderStyle.Render("🔍 Provider Setup Wizard")
 	sb.WriteString(header + "\n\n")
-
-	if m.StatusMsg != "" {
-		if m.IsError {
-			sb.WriteString(styles.ErrorStyle.Render("❌ "+m.StatusMsg) + "\n\n")
-		} else {
-			sb.WriteString(styles.SubtitleStyle.Render("ℹ️  "+m.StatusMsg) + "\n\n")
-		}
-	}
+	sb.WriteString(renderStatusBanner(m.StatusMsg, m.IsError))
 
 	switch m.Step {
 	case StepInputCredentials:
@@ -269,23 +264,7 @@ func (m ProbeModel) View() string {
 		if len(m.DiscoveredModels) > 0 {
 			totalModels := len(m.DiscoveredModels)
 			sb.WriteString(styles.MetricLabelStyle.Render(fmt.Sprintf("Discovered Models List (Model list length: %d, [%d/%d], Use ↑/↓ to navigate):", totalModels, m.ModelCursor+1, totalModels)) + "\n")
-			startIdx, endIdx := visibleWindow(m.ModelCursor, totalModels, 20)
-
-			if startIdx > 0 {
-				sb.WriteString(fmt.Sprintf("   ▲ %d models above...\n", startIdx))
-			}
-
-			for i := startIdx; i < endIdx; i++ {
-				prefix := "  "
-				if i == m.ModelCursor {
-					prefix = "👉"
-				}
-				sb.WriteString(fmt.Sprintf("%s %s\n", prefix, styles.MetricValueStyle.Render(m.DiscoveredModels[i])))
-			}
-
-			if endIdx < totalModels {
-				sb.WriteString(fmt.Sprintf("   ▼ %d models below...\n", totalModels-endIdx))
-			}
+			renderModelWindow(&sb, m.DiscoveredModels, m.ModelCursor, 20)
 			sb.WriteString("\n")
 		} else {
 			sb.WriteString(styles.HelpStyle.Render("No models discovered via /models endpoint (Model list length: 0).") + "\n\n")
@@ -309,17 +288,10 @@ func (m ProbeModel) View() string {
 			if m.ProbeResult != nil && m.ProbeResult.EndpointDetails != nil {
 				detail = m.ProbeResult.EndpointDetails[apiType]
 			}
-			if detail == "" {
-				detail = "Available"
-			}
+			detail = cmp.Or(detail, "Available")
 			badgeStyle := styles.BadgeStyle
-			if m.ProbeResult != nil {
-				for _, supportedType := range m.ProbeResult.SupportedAPITypes {
-					if supportedType == apiType {
-						badgeStyle = styles.BadgeSuccessStyle
-						break
-					}
-				}
+			if m.ProbeResult != nil && slices.Contains(m.ProbeResult.SupportedAPITypes, apiType) {
+				badgeStyle = styles.BadgeSuccessStyle
 			}
 			sb.WriteString(fmt.Sprintf("%s %s (%s)\n", prefix, badgeStyle.Render(apiType), detail))
 		}

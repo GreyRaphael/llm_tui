@@ -12,27 +12,32 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 )
 
-func (m TesterModel) handleStreamChunk(msg api.StreamChunkMsg) (TesterModel, tea.Cmd, string) {
+func (m TesterModel) handleStreamChunk(msg api.StreamChunkMsg) (TesterModel, tea.Cmd, Action) {
 	m.applyStreamChunk(msg)
 	if !msg.Done {
 		if m.LastStreamRender.IsZero() || time.Since(m.LastStreamRender) >= 33*time.Millisecond {
+			followBottom := m.Viewport.AtBottom()
+			m.syncViewportHeight()
 			m.setViewportContent(m.renderStreamingProgress())
-			if m.IsExecuting {
+			if followBottom {
 				m.Viewport.GotoBottom()
 			}
 			m.LastStreamRender = time.Now()
 		}
-		return m, waitForStreamChunkCmd(m.requestID, m.StreamChan), ""
+		return m, waitForStreamChunkCmd(m.requestID, m.StreamChan), ActionNone
 	}
 
+	followBottom := m.Viewport.AtBottom()
 	m.IsExecuting = false
 	m.StreamChan = nil
 	cancelTrackedRequest(&m.cancelExecution, &m.requestID)
-	m.setViewportContent(m.renderCompletedStream())
 	m.LastResult = m.buildStreamResult()
 	m.setStatus("", false)
-	m.Viewport.GotoBottom()
-	return m, nil, ""
+	m.setViewportContent(m.renderCompletedStream())
+	if followBottom {
+		m.Viewport.GotoBottom()
+	}
+	return m, nil, ActionNone
 }
 
 func (m *TesterModel) applyStreamChunk(msg api.StreamChunkMsg) {
@@ -134,28 +139,13 @@ func (m TesterModel) assembledStreamJSON() string {
 		}
 		return ""
 	}
-	payload := map[string]interface{}{
-		"model": m.Record.Model,
-		"choices": []map[string]interface{}{
-			{
-				"index": 0,
-				"message": map[string]interface{}{
-					"role":              "assistant",
-					"content":           m.ContentText,
-					"reasoning_content": m.ReasoningText,
-				},
-				"finish_reason": "stop",
-			},
-		},
-		"usage": map[string]int{
-			"prompt_tokens":     m.StreamPromptTokens,
-			"completion_tokens": m.StreamCompletionTokens,
-			"total_tokens":      m.StreamTotalTokens,
-		},
-	}
-	buf, err := json.Marshal(payload)
+	assembled, err := api.BuildAssembledResponseJSON(
+		"", m.Record.Model,
+		m.ContentText, m.ReasoningText,
+		m.StreamPromptTokens, m.StreamCompletionTokens, m.StreamTotalTokens,
+	)
 	if err != nil {
 		return m.ContentText
 	}
-	return string(buf)
+	return assembled
 }

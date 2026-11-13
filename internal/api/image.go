@@ -21,11 +21,9 @@ type OpenAIImagesResponse struct {
 		B64JSON string `json:"b64_json"`
 		URL     string `json:"url"`
 	} `json:"data"`
-	Error *struct {
-		Message string `json:"message"`
-		Type    string `json:"type"`
-	} `json:"error,omitempty"`
 }
+
+var sanitizeTitleRegexp = regexp.MustCompile(`[^\p{L}\p{N}_-]+`)
 
 // SanitizeTitle transforms a prompt into a safe, clean file slug
 func SanitizeTitle(prompt string) string {
@@ -34,8 +32,7 @@ func SanitizeTitle(prompt string) string {
 		return "generated_image"
 	}
 	// Strip special punctuation
-	reg := regexp.MustCompile(`[^\p{L}\p{N}_-]+`)
-	cleaned := reg.ReplaceAllString(prompt, "_")
+	cleaned := sanitizeTitleRegexp.ReplaceAllString(prompt, "_")
 	cleaned = strings.Trim(cleaned, "_")
 	// Clamp max length to 32 runes
 	runes := []rune(cleaned)
@@ -50,7 +47,7 @@ func SanitizeTitle(prompt string) string {
 
 // ExtractPromptFromPayload extracts the prompt field from request payload JSON
 func ExtractPromptFromPayload(payloadJSON string) string {
-	var m map[string]interface{}
+	var m map[string]any
 	if err := json.Unmarshal([]byte(payloadJSON), &m); err == nil {
 		if p, ok := m["prompt"].(string); ok && strings.TrimSpace(p) != "" {
 			return strings.TrimSpace(p)
@@ -119,24 +116,15 @@ func SaveImagesFromResponse(rawJSON string, prompt string) ([]string, string, er
 				continue
 			}
 
-			// Detect image format from magic bytes
-			ext := ".png"
-			if len(imgBytes) > 3 && imgBytes[0] == 0xFF && imgBytes[1] == 0xD8 && imgBytes[2] == 0xFF {
-				ext = ".jpg"
-			} else if len(imgBytes) > 3 && string(imgBytes[:4]) == "RIFF" {
-				ext = ".webp"
+			ext := detectImageExtension(imgBytes)
+			baseName := fmt.Sprintf("%s_%s", timestamp, slug)
+			if len(resp.Data) > 1 {
+				baseName = fmt.Sprintf("%s_%s_%d", timestamp, slug, i+1)
 			}
 
-			var fileName string
-			if len(resp.Data) == 1 {
-				fileName = fmt.Sprintf("%s_%s%s", timestamp, slug, ext)
-			} else {
-				fileName = fmt.Sprintf("%s_%s_%d%s", timestamp, slug, i+1, ext)
-			}
-
-			targetPath := filepath.Join(outputDir, fileName)
-			if err := os.WriteFile(targetPath, imgBytes, 0644); err != nil {
-				return savedPaths, rawJSON, fmt.Errorf("failed to save image to %s: %w", targetPath, err)
+			targetPath, err := writeUniqueImageFile(outputDir, baseName, ext, imgBytes)
+			if err != nil {
+				return savedPaths, rawJSON, err
 			}
 
 			savedPaths = append(savedPaths, targetPath)
@@ -155,7 +143,7 @@ func SaveImagesFromResponse(rawJSON string, prompt string) ([]string, string, er
 		}
 	}
 
-	sanitizedMap := map[string]interface{}{
+	sanitizedMap := map[string]any{
 		"created": resp.Created,
 		"data":    sanitizedData,
 		"summary": fmt.Sprintf("✅ Successfully saved %d image(s) to %s (Press Ctrl+O to open)", len(savedPaths), outputDir),
@@ -169,6 +157,44 @@ func SaveImagesFromResponse(rawJSON string, prompt string) ([]string, string, er
 	}
 
 	return savedPaths, string(sanitizedJSON), nil
+}
+
+func detectImageExtension(imgBytes []byte) string {
+	switch {
+	case len(imgBytes) >= 3 && imgBytes[0] == 0xFF && imgBytes[1] == 0xD8 && imgBytes[2] == 0xFF:
+		return ".jpg"
+	case len(imgBytes) >= 12 && string(imgBytes[:4]) == "RIFF" && string(imgBytes[8:12]) == "WEBP":
+		return ".webp"
+	default:
+		return ".png"
+	}
+}
+
+// writeUniqueImageFile atomically writes image bytes to a non-colliding filename.
+func writeUniqueImageFile(dir, baseName, ext string, data []byte) (string, error) {
+	for attempt := 0; ; attempt++ {
+		name := baseName + ext
+		if attempt > 0 {
+			name = fmt.Sprintf("%s_%d%s", baseName, attempt+1, ext)
+		}
+		targetPath := filepath.Join(dir, name)
+		f, err := os.OpenFile(targetPath, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0644)
+		if err != nil {
+			if os.IsExist(err) {
+				continue
+			}
+			return "", fmt.Errorf("failed to save image to %s: %w", targetPath, err)
+		}
+		_, writeErr := f.Write(data)
+		closeErr := f.Close()
+		if writeErr != nil {
+			return "", fmt.Errorf("failed to save image to %s: %w", targetPath, writeErr)
+		}
+		if closeErr != nil {
+			return "", fmt.Errorf("failed to save image to %s: %w", targetPath, closeErr)
+		}
+		return targetPath, nil
+	}
 }
 
 // ErrHeadlessEnvironment is returned when trying to open a graphical viewer in a headless terminal (e.g. over remote SSH)
@@ -196,5 +222,12 @@ func OpenImageFile(filePath string) error {
 		return fmt.Errorf("unsupported operating system: %s", runtime.GOOS)
 	}
 
-	return cmd.Start()
+	if err := cmd.Start(); err != nil {
+		return err
+	}
+	// Reap the detached viewer child asynchronously to prevent zombie processes.
+	go func() {
+		_ = cmd.Wait()
+	}()
+	return nil
 }

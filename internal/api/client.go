@@ -2,6 +2,7 @@ package api
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -15,6 +16,10 @@ import (
 	"golang.org/x/text/encoding/simplifiedchinese"
 	"golang.org/x/text/transform"
 )
+
+// requestHTTPClient is shared across non-fixed-timeout streaming and test calls
+// (per-request deadlines are governed via context timeouts).
+var requestHTTPClient = &http.Client{}
 
 // setAuthHeaders configures provider auth headers. When apiKey is empty, no
 // auth header is sent, allowing providers and local servers that require no key.
@@ -124,14 +129,11 @@ func ExecuteStreamRequest(ctx context.Context, baseURL, apiKey, apiType, payload
 		return
 	}
 
-	client := &http.Client{}
 	startTime := time.Now()
-	resp, err := doPostWithFallback(ctx, client, urls, apiType, apiKey, payloadJSON)
+	resp, err := doPostWithFallback(ctx, requestHTTPClient, urls, apiType, apiKey, payloadJSON)
 	initialLatency := time.Since(startTime)
 	if resp == nil {
-		if err == nil {
-			err = fmt.Errorf("no reachable endpoint")
-		}
+		err = cmp.Or(err, fmt.Errorf("no reachable endpoint"))
 		sendChunk(ctx, msgChan, StreamChunkMsg{Err: fmt.Errorf("HTTP execution error: %v", err), Latency: initialLatency, Done: true})
 		return
 	}
@@ -144,14 +146,9 @@ func ExecuteStreamRequest(ctx context.Context, baseURL, apiKey, apiType, payload
 			errSnippet = readErr.Error()
 		} else {
 			bodyStr := decodeGBKIfNeeded(body)
-			errSnippet = extractErrorMessage(bodyStr)
-			if errSnippet == "" {
-				errSnippet = bodyStr
-			}
+			errSnippet = cmp.Or(extractErrorMessage(bodyStr), bodyStr)
 		}
-		if errSnippet == "" {
-			errSnippet = resp.Status
-		}
+		errSnippet = cmp.Or(errSnippet, resp.Status)
 		sendChunk(ctx, msgChan, StreamChunkMsg{
 			StatusCode: resp.StatusCode,
 			Latency:    time.Since(startTime),
@@ -305,15 +302,12 @@ func ExecuteTestRequest(ctx context.Context, baseURL, apiKey, apiType, payloadJS
 	ctx, cancel := context.WithTimeout(ctx, 90*time.Second)
 	defer cancel()
 
-	client := &http.Client{}
 	startTime := time.Now()
-	resp, err := doPostWithFallback(ctx, client, urls, apiType, apiKey, payloadJSON)
+	resp, err := doPostWithFallback(ctx, requestHTTPClient, urls, apiType, apiKey, payloadJSON)
 	res.Latency = time.Since(startTime)
 
 	if resp == nil {
-		if err == nil {
-			err = fmt.Errorf("no reachable endpoint")
-		}
+		err = cmp.Or(err, fmt.Errorf("no reachable endpoint"))
 		res.Error = "HTTP execution error: " + err.Error()
 		return res
 	}
@@ -333,23 +327,18 @@ func ExecuteTestRequest(ctx context.Context, baseURL, apiKey, apiType, payloadJS
 	// Check if response is a JSON error object (including gateways like LiteLLM
 	// returning nested error structures). A present but null "error" key (common
 	// in OpenAI Responses non-stream payloads) must NOT trigger the error path.
-	isErrorJSON := false
-	var genericCheck map[string]interface{}
-	if err := json.Unmarshal([]byte(bodyStr), &genericCheck); err == nil {
-		if errVal, ok := genericCheck["error"]; ok && errVal != nil {
-			isErrorJSON = true
-		}
-	}
+	var parsedBody map[string]any
+	hasParsedJSON := json.Unmarshal([]byte(bodyStr), &parsedBody) == nil
+	isErrorJSON := hasParsedJSON && parsedBody["error"] != nil
 
-	if isErrorJSON {
-		// Unescape nested error messages for clean, human-readable display
-		readable := unescapeForDisplay(bodyStr)
-		res.FormattedBody = readable
-	} else if isSSEResponse([]byte(bodyStr)) {
+	switch {
+	case isErrorJSON:
+		res.FormattedBody = unescapeForDisplay(bodyStr, parsedBody)
+	case isSSEResponse([]byte(bodyStr)):
 		// If response contains raw SSE stream data (e.g. gateway returned stream logs), parse and assemble
 		res.RawBody = assembleSSEResponse([]byte(bodyStr), res)
 		res.FormattedBody = FormatJSON(res.RawBody)
-	} else {
+	default:
 		res.FormattedBody = FormatJSON(res.RawBody)
 	}
 
@@ -370,8 +359,9 @@ func ExecuteTestRequest(ctx context.Context, baseURL, apiKey, apiType, payloadJS
 		}
 	}
 
-	// Extract token usage metrics & error if present in JSON
-	extractTokenUsage([]byte(res.RawBody), res)
+	if hasParsedJSON {
+		applyResponseMetadata(parsedBody, res)
+	}
 
 	return res
 }
@@ -391,21 +381,16 @@ func decodeGBKIfNeeded(data []byte) string {
 }
 
 // unescapeForDisplay cleans up nested JSON escape sequences for human-readable display
-func unescapeForDisplay(s string) string {
-	// First, try to pretty-print the JSON structure
-	var genericMap map[string]interface{}
-	if err := json.Unmarshal([]byte(s), &genericMap); err == nil {
-		// Extract the error message string and unescape it
-		if errObj, ok := genericMap["error"].(map[string]interface{}); ok {
-			if msg, ok := errObj["message"].(string); ok {
-				// The message string is already unescaped by json.Unmarshal,
-				// but may contain further escaped sequences from nested JSON
-				msg = strings.ReplaceAll(msg, `\"`, `"`)
-				msg = strings.ReplaceAll(msg, `\\n`, "\n")
-				msg = strings.ReplaceAll(msg, `\n`, "\n")
-				msg = strings.ReplaceAll(msg, `\\`, `\`)
-				return msg
-			}
+func unescapeForDisplay(s string, parsed map[string]any) string {
+	if errObj, ok := parsed["error"].(map[string]any); ok {
+		if msg, ok := errObj["message"].(string); ok {
+			// The message string is already unescaped by json.Unmarshal,
+			// but may contain further escaped sequences from nested JSON
+			msg = strings.ReplaceAll(msg, `\"`, `"`)
+			msg = strings.ReplaceAll(msg, `\\n`, "\n")
+			msg = strings.ReplaceAll(msg, `\n`, "\n")
+			msg = strings.ReplaceAll(msg, `\\`, `\`)
+			return msg
 		}
 	}
 	// Fallback: basic unescape
@@ -417,14 +402,45 @@ func unescapeForDisplay(s string) string {
 }
 
 func isSSEResponse(body []byte) bool {
-	for _, line := range strings.Split(string(body), "\n") {
-		trimmed := strings.TrimSpace(line)
-		if strings.HasPrefix(trimmed, "data:") ||
-			(strings.HasPrefix(trimmed, "Original Response:") && strings.Contains(trimmed, "data:")) {
+	for line := range bytes.SplitSeq(body, []byte("\n")) {
+		trimmed := bytes.TrimSpace(line)
+		if bytes.HasPrefix(trimmed, []byte("data:")) ||
+			(bytes.HasPrefix(trimmed, []byte("Original Response:")) && bytes.Contains(trimmed, []byte("data:"))) {
 			return true
 		}
 	}
 	return false
+}
+
+// BuildAssembledResponseJSON constructs a normalized chat-completion JSON string
+// from accumulated content, reasoning, and token usage metrics.
+func BuildAssembledResponseJSON(id, model, content, reasoning string, promptTokens, completionTokens, totalTokens int) (string, error) {
+	assembledMap := map[string]any{
+		"id":     id,
+		"model":  model,
+		"object": "chat.completion",
+		"choices": []map[string]any{
+			{
+				"index": 0,
+				"message": map[string]any{
+					"role":              "assistant",
+					"content":           content,
+					"reasoning_content": reasoning,
+				},
+				"finish_reason": "stop",
+			},
+		},
+		"usage": map[string]int{
+			"prompt_tokens":     promptTokens,
+			"completion_tokens": completionTokens,
+			"total_tokens":      totalTokens,
+		},
+	}
+	buf, err := json.Marshal(assembledMap)
+	if err != nil {
+		return "", err
+	}
+	return string(buf), nil
 }
 
 func assembleSSEResponse(body []byte, res *TestResult) string {
@@ -435,14 +451,13 @@ func assembleSSEResponse(body []byte, res *TestResult) string {
 		bodyStr = bodyStr[idx+len("Original Response:"):]
 	}
 
-	lines := strings.Split(bodyStr, "\n")
 	var contentBuilder strings.Builder
 	var reasoningBuilder strings.Builder
 	var usage streamUsage
 	var lastModel string
 	var lastID string
 
-	for _, line := range lines {
+	for line := range strings.Lines(bodyStr) {
 		chunk, done, ok := parseSSELine(line)
 		if done {
 			break
@@ -456,7 +471,7 @@ func assembleSSEResponse(body []byte, res *TestResult) string {
 		if id, ok := chunk["id"].(string); ok && id != "" {
 			lastID = id
 		}
-		if response, ok := chunk["response"].(map[string]interface{}); ok {
+		if response, ok := chunk["response"].(map[string]any); ok {
 			if m, ok := response["model"].(string); ok && m != "" {
 				lastModel = m
 			}
@@ -473,41 +488,23 @@ func assembleSSEResponse(body []byte, res *TestResult) string {
 	res.CompletionTokens = usage.completion
 	res.TotalTokens = usage.total
 
-	assembledMap := map[string]interface{}{
-		"id":     lastID,
-		"model":  lastModel,
-		"object": "chat.completion",
-		"choices": []map[string]interface{}{
-			{
-				"index": 0,
-				"message": map[string]interface{}{
-					"role":              "assistant",
-					"content":           contentBuilder.String(),
-					"reasoning_content": reasoningBuilder.String(),
-				},
-				"finish_reason": "stop",
-			},
-		},
-		"usage": map[string]int{
-			"prompt_tokens":     res.PromptTokens,
-			"completion_tokens": res.CompletionTokens,
-			"total_tokens":      res.TotalTokens,
-		},
-	}
-
 	// Reset error status if SSE content was successfully assembled
 	if contentBuilder.Len() > 0 || reasoningBuilder.Len() > 0 {
 		res.Error = ""
 	}
 
-	assembledJSON, err := json.Marshal(assembledMap)
+	assembledJSON, err := BuildAssembledResponseJSON(
+		lastID, lastModel,
+		contentBuilder.String(), reasoningBuilder.String(),
+		res.PromptTokens, res.CompletionTokens, res.TotalTokens,
+	)
 	if err != nil {
 		return string(body)
 	}
-	return string(assembledJSON)
+	return assembledJSON
 }
 
-func extractTokenUsageFromMap(usageMap map[string]interface{}, promptTokens, completionTokens, totalTokens *int) {
+func extractTokenUsageFromMap(usageMap map[string]any, promptTokens, completionTokens, totalTokens *int) {
 	if pt, ok := usageMap["prompt_tokens"].(float64); ok {
 		*promptTokens = int(pt)
 	} else if pt, ok := usageMap["input_tokens"].(float64); ok {
@@ -523,21 +520,18 @@ func extractTokenUsageFromMap(usageMap map[string]interface{}, promptTokens, com
 	}
 }
 
-func extractTokenUsage(body []byte, res *TestResult) {
-	var genericMap map[string]interface{}
-	if err := json.Unmarshal(body, &genericMap); err != nil {
-		return
-	}
-
-	// Check if top-level "error" key is present in JSON body
+func applyResponseMetadata(parsedBody map[string]any, res *TestResult) {
 	if res.Error == "" {
-		if errVal, ok := genericMap["error"]; ok {
-			if errObj, ok := errVal.(map[string]interface{}); ok {
-				if msg, ok := errObj["message"].(string); ok && msg != "" {
+		if errVal, ok := parsedBody["error"]; ok {
+			switch v := errVal.(type) {
+			case map[string]any:
+				if msg, ok := v["message"].(string); ok && msg != "" {
 					res.Error = msg
 				}
-			} else if errMsg, ok := errVal.(string); ok && errMsg != "" {
-				res.Error = errMsg
+			case string:
+				if v != "" {
+					res.Error = v
+				}
 			}
 		}
 	}
@@ -547,7 +541,7 @@ func extractTokenUsage(body []byte, res *TestResult) {
 		completion: res.CompletionTokens,
 		total:      res.TotalTokens,
 	}
-	usage.addChunk(genericMap)
+	usage.addChunk(parsedBody)
 	res.PromptTokens = usage.prompt
 	res.CompletionTokens = usage.completion
 	res.TotalTokens = usage.total
